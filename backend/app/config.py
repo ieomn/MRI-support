@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     
     # MedGemma 远程推理配置（AutoDL 云 GPU）
     MEDGEMMA_API_URL: str = "http://localhost:8080"
-    MEDGEMMA_API_TIMEOUT: int = 120  # MedGemma 推理较慢，需更长超时
+    MEDGEMMA_API_TIMEOUT: int = 180  # MedGemma 27B 推理较慢，需更长超时
     MEDGEMMA_MAX_RETRIES: int = 2
     MEDGEMMA_MODEL_ID: str = "google/medgemma-27b-it"
     

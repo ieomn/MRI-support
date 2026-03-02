@@ -26,7 +26,8 @@ class MedGemmaService:
     async def connect(self):
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
-            timeout=httpx.Timeout(self.timeout, connect=10.0),
+            timeout=httpx.Timeout(self.timeout, connect=30.0),
+            verify=False,
         )
         logger.info(f"MedGemma 客户端已连接: {self.base_url}")
 

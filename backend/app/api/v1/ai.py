@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, Field
 from typing import Optional
+import re
 import numpy as np
 
 from app.core.database import get_db
@@ -321,11 +322,15 @@ async def medgemma_analyze_prognosis(
                 detail=f"MedGemma 预后分析失败: {analysis.get('error', '未知错误')}",
             )
 
+        report_text = analysis["content"]
+        parsed = _parse_prognosis_report(report_text)
+
         result_data = {
             "patient_id": data.patient_id,
-            "report": analysis["content"],
+            "report": report_text,
             "inference_time": analysis.get("inference_time", 0),
             "model_id": analysis.get("model_id", ""),
+            **parsed,
         }
 
         await cache.set_ai_result(data.patient_id, "medgemma_prognosis", result_data)
@@ -333,7 +338,7 @@ async def medgemma_analyze_prognosis(
         background_tasks.add_task(
             save_medgemma_prognosis_to_db,
             db, data.patient_id,
-            analysis["content"], data.clinical_data,
+            report_text, data.clinical_data,
             analysis.get("inference_time", 0),
         )
 
@@ -378,6 +383,40 @@ async def medgemma_freeform(data: MedGemmaFreeformRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"MedGemma 问答失败: {str(e)}")
+
+
+# ==================== LLM 输出结构化解析 ====================
+
+def _parse_prognosis_report(text: str) -> dict:
+    """
+    Best-effort extraction of structured numbers from MedGemma prognosis text.
+    Returns keys: risk_level, risk_score, survival, recurrence
+    """
+    result: dict = {}
+
+    level_match = re.search(r"风险[等级]*[：:\s]*(低|中|高)", text)
+    if level_match:
+        mapping = {"低": "low", "中": "medium", "高": "high"}
+        result["risk_level"] = mapping.get(level_match.group(1), "medium")
+        result["risk_score"] = {"low": 0.2, "medium": 0.5, "high": 0.8}.get(result["risk_level"], 0.5)
+
+    survival: dict = {}
+    for label, key in [("1年", "1_year"), ("3年", "3_year"), ("5年", "5_year")]:
+        m = re.search(rf"{label}[总生存率]*[：:\s]*(?:约)?(\d{{1,3}})[\s]*[%％]", text)
+        if m:
+            survival[key] = min(int(m.group(1)), 100) / 100.0
+    if survival:
+        result["survival"] = survival
+
+    recurrence: dict = {}
+    for label, key in [("2年", "2_year"), ("5年", "5_year")]:
+        m = re.search(rf"(?:复发)[^。]*{label}[^。]*?(\d{{1,3}})[\s]*[%％]", text)
+        if m:
+            recurrence[key] = min(int(m.group(1)), 100) / 100.0
+    if recurrence:
+        result["recurrence"] = recurrence
+
+    return result
 
 
 # ==================== 后台任务函数 ====================

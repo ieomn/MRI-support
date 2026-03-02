@@ -34,7 +34,8 @@ import {
   ArrowLeftOutlined,
 } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
-import { patientAPI, imageAPI, aiAPI, medgemmaAPI } from '../../services/api';
+import { patientAPI, imageAPI, aiAPI, medgemmaAPI, followupAPI } from '../../services/api';
+import { RiskGauge, SurvivalChart, AIResultCard } from '../../components/AIResultViz';
 import type { UploadProps, TabsProps } from 'antd';
 
 const { TextArea } = Input;
@@ -90,6 +91,8 @@ const PatientDetail: React.FC = () => {
   const [aiResults, setAiResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
+  const [followupTasks, setFollowupTasks] = useState<any[]>([]);
+
   // MedGemma 状态
   const [mgImageLoading, setMgImageLoading] = useState(false);
   const [mgProgLoading, setMgProgLoading] = useState(false);
@@ -124,13 +127,21 @@ const PatientDetail: React.FC = () => {
     } catch { /* handled by interceptor */ }
   }, [patientId]);
 
+  const loadFollowup = useCallback(async () => {
+    try {
+      const res: any = await followupAPI.getPatientTasks(patientId);
+      if (res.success) setFollowupTasks(res.data || []);
+    } catch { /* interceptor */ }
+  }, [patientId]);
+
   useEffect(() => {
     if (patientId) {
       loadPatient();
       loadImages();
       loadAIResults();
+      loadFollowup();
     }
-  }, [patientId, loadPatient, loadImages, loadAIResults]);
+  }, [patientId, loadPatient, loadImages, loadAIResults, loadFollowup]);
 
   // ========== U-Net 分割 ==========
 
@@ -385,7 +396,13 @@ const PatientDetail: React.FC = () => {
           {aiResults.length === 0 ? (
             <Empty description="暂无 AI 分析结果" />
           ) : (
-            <Table dataSource={aiResults} rowKey="id" columns={aiResultColumns} />
+            <>
+              {aiResults.map((r: any) => (
+                <AIResultCard key={r.id} result={r} />
+              ))}
+              <Divider>详细列表</Divider>
+              <Table dataSource={aiResults} rowKey="id" columns={aiResultColumns} size="small" />
+            </>
           )}
         </>
       ),
@@ -481,6 +498,24 @@ const PatientDetail: React.FC = () => {
             </div>
             {mgProgReport && (
               <div style={{ marginTop: 16 }}>
+                {mgProgReport.risk_score != null && (
+                  <Card size="small" style={{ marginBottom: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 32 }}>
+                      <div style={{ width: 200 }}>
+                        <RiskGauge
+                          score={mgProgReport.risk_score ?? 0.5}
+                          level={mgProgReport.risk_level || 'medium'}
+                        />
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <SurvivalChart
+                          survival={mgProgReport.survival}
+                          recurrence={mgProgReport.recurrence}
+                        />
+                      </div>
+                    </div>
+                  </Card>
+                )}
                 <ReportViewer
                   title="MedGemma 预后分析报告"
                   content={mgProgReport.report}
@@ -540,7 +575,39 @@ const PatientDetail: React.FC = () => {
     {
       key: 'followup',
       label: '随访记录',
-      children: <Empty description="随访记录功能开发中" />,
+      children: (
+        <>
+          {followupTasks.length === 0 ? (
+            <Empty description="暂无随访任务，请在「随访管理」中创建随访计划" />
+          ) : (
+            <Table
+              dataSource={followupTasks}
+              rowKey="id"
+              columns={[
+                { title: '任务', dataIndex: 'task_title', key: 'task_title' },
+                { title: '类型', dataIndex: 'task_type', key: 'task_type', width: 100, render: (t: string) => <Tag>{t}</Tag> },
+                { title: '计划日期', dataIndex: 'scheduled_date', key: 'scheduled_date', width: 170 },
+                { title: '完成日期', dataIndex: 'completed_date', key: 'completed_date', width: 170, render: (d: string) => d || '-' },
+                {
+                  title: '状态',
+                  dataIndex: 'status',
+                  key: 'status',
+                  width: 100,
+                  render: (s: string) => {
+                    const map: Record<string, { color: string; text: string }> = {
+                      pending: { color: 'blue', text: '待完成' },
+                      completed: { color: 'green', text: '已完成' },
+                      overdue: { color: 'red', text: '已逾期' },
+                    };
+                    const m = map[s] || { color: 'default', text: s };
+                    return <Tag color={m.color}>{m.text}</Tag>;
+                  },
+                },
+              ]}
+            />
+          )}
+        </>
+      ),
     },
   ];
 

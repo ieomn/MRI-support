@@ -12,8 +12,12 @@ import {
   DashboardOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
+import { Result } from 'antd';
 import PatientList from './pages/PatientList';
 import PatientDetail from './pages/PatientDetail';
+import ImageManage from './pages/ImageManage';
+import FollowUp from './pages/FollowUp';
+import Dashboard from './pages/Dashboard';
 import { medgemmaAPI } from './services/api';
 import './App.css';
 
@@ -21,16 +25,23 @@ const { Header, Sider, Content } = Layout;
 
 const MENU_ROUTE_MAP: Record<string, string> = {
   patients: '/patients',
-  images: '/patients',
-  followup: '/patients',
-  dashboard: '/patients',
+  images: '/images',
+  followup: '/followup',
+  dashboard: '/dashboard',
 };
+
+const PATH_KEY_MAP: [string, string][] = [
+  ['/patients', 'patients'],
+  ['/images', 'images'],
+  ['/followup', 'followup'],
+  ['/dashboard', 'dashboard'],
+];
 
 const SideMenu: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const selectedKey = location.pathname.startsWith('/patients') ? 'patients' : 'patients';
+  const selectedKey = PATH_KEY_MAP.find(([p]) => location.pathname.startsWith(p))?.[1] || 'patients';
 
   const menuItems = [
     { key: 'patients', icon: <UserOutlined />, label: '患者管理' },
@@ -133,7 +144,10 @@ const AppLayout: React.FC = () => (
             <Route path="/" element={<Navigate to="/patients" replace />} />
             <Route path="/patients" element={<PatientList />} />
             <Route path="/patients/:id" element={<PatientDetail />} />
-            <Route path="*" element={<div>页面不存在</div>} />
+            <Route path="/images" element={<ImageManage />} />
+            <Route path="/followup" element={<FollowUp />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="*" element={<Result status="404" title="页面不存在" />} />
           </Routes>
         </Content>
       </Layout>

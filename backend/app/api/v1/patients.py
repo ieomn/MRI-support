@@ -91,8 +91,11 @@ async def create_patient(
         await db.commit()
         await db.refresh(patient)
         
-        # 写入缓存
+        # 写入缓存并清除列表缓存（使列表刷新）
         await cache.set_patient_info(patient.id, patient.to_dict())
+        list_keys = await cache.redis.keys("patient:list:*")
+        if list_keys:
+            await cache.redis.delete(*list_keys)
         
         return {
             "success": True,
