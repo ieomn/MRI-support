@@ -55,11 +55,17 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE: int = 500 * 1024 * 1024  # 500MB
     ALLOWED_DICOM_EXTENSIONS: list = [".dcm", ".dicom", ".DCM"]
     
-    # AI模型配置
+    # AI模型配置（本地 U-Net / Regression）
     AI_MODEL_PATH: str = "./models"
     UNET_MODEL_FILE: str = "unet_segmentation.pth"
     REGRESSION_MODEL_FILE: str = "prognosis_regression.pkl"
     AI_INFERENCE_TIMEOUT: int = 30  # 秒
+    
+    # MedGemma 远程推理配置（AutoDL 云 GPU）
+    MEDGEMMA_API_URL: str = "http://localhost:8080"
+    MEDGEMMA_API_TIMEOUT: int = 120  # MedGemma 推理较慢，需更长超时
+    MEDGEMMA_MAX_RETRIES: int = 2
+    MEDGEMMA_MODEL_ID: str = "google/medgemma-27b-it"
     
     # Celery任务队列配置
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
