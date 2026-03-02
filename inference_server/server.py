@@ -1,9 +1,14 @@
 """
 MedGemma 推理服务器
 部署到 AutoDL 等云 GPU 平台，加载 MedGemma 27B 并暴露 HTTP API
-硬件要求：A100 GPU (40GB+ VRAM)，建议使用 4-bit 量化以降低显存需求
+
+环境变量:
+  HF_ENDPOINT  -- HuggingFace 镜像地址（国内必须设置，如 https://hf-mirror.com）
+  HF_TOKEN     -- HuggingFace Access Token
+  USE_QUANTIZATION -- 设为 "true" 启用 4-bit 量化（VRAM<48GB 时建议开启）
 """
 import io
+import os
 import time
 import base64
 from contextlib import asynccontextmanager
@@ -17,18 +22,41 @@ from pydantic import BaseModel, Field
 from loguru import logger
 
 MODEL_ID = "google/medgemma-27b-it"
-USE_QUANTIZATION = True
+
+# 96GB VRAM 的卡不需要量化；40GB 的 A100 需要量化
+USE_QUANTIZATION = os.environ.get("USE_QUANTIZATION", "false").lower() == "true"
 
 model = None
 processor = None
 
 
+def detect_quantization() -> bool:
+    """根据 GPU 显存自动决定是否量化"""
+    if not torch.cuda.is_available():
+        return True
+    vram_gb = torch.cuda.get_device_properties(0).total_mem / (1024 ** 3)
+    logger.info(f"GPU 显存: {vram_gb:.1f} GB")
+    if vram_gb >= 60:
+        logger.info("显存充足 (>=60GB)，无需量化，使用 bfloat16 全精度")
+        return False
+    else:
+        logger.info("显存有限 (<60GB)，启用 4-bit 量化")
+        return True
+
+
 def load_medgemma():
     """加载 MedGemma 模型和处理器"""
-    global model, processor
+    global model, processor, USE_QUANTIZATION
     from transformers import AutoModelForImageTextToText, AutoProcessor
 
-    logger.info(f"正在加载模型: {MODEL_ID} (量化={USE_QUANTIZATION})")
+    # 自动检测是否需要量化（除非环境变量强制指定）
+    if os.environ.get("USE_QUANTIZATION") is None:
+        USE_QUANTIZATION = detect_quantization()
+
+    logger.info(f"正在加载模型: {MODEL_ID}")
+    logger.info(f"  量化: {USE_QUANTIZATION}")
+    logger.info(f"  HF_ENDPOINT: {os.environ.get('HF_ENDPOINT', '(未设置，使用官方地址)')}")
+    logger.info(f"  HF_TOKEN: {'已设置' if os.environ.get('HF_TOKEN') else '未设置'}")
 
     model_kwargs = dict(
         torch_dtype=torch.bfloat16,
@@ -39,9 +67,19 @@ def load_medgemma():
         from transformers import BitsAndBytesConfig
         model_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True)
 
-    model = AutoModelForImageTextToText.from_pretrained(MODEL_ID, **model_kwargs)
-    processor = AutoProcessor.from_pretrained(MODEL_ID)
-    logger.info("MedGemma 模型加载完成")
+    logger.info("下载/加载模型权重中（首次约 15-50GB，请耐心等待）...")
+    model = AutoModelForImageTextToText.from_pretrained(
+        MODEL_ID,
+        token=os.environ.get("HF_TOKEN"),
+        **model_kwargs,
+    )
+    processor = AutoProcessor.from_pretrained(
+        MODEL_ID,
+        token=os.environ.get("HF_TOKEN"),
+    )
+
+    vram_used = torch.cuda.memory_allocated() / (1024 ** 3) if torch.cuda.is_available() else 0
+    logger.info(f"MedGemma 模型加载完成 (GPU 显存占用: {vram_used:.1f} GB)")
 
 
 @asynccontextmanager
@@ -133,10 +171,12 @@ def run_inference(messages: list[dict], max_new_tokens: int) -> str:
 @app.get("/health")
 async def health_check():
     return {
-        "status": "healthy",
+        "status": "healthy" if model is not None else "loading",
         "model_loaded": model is not None,
         "model_id": MODEL_ID,
+        "quantized": USE_QUANTIZATION,
         "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
+        "gpu_memory_total": f"{torch.cuda.get_device_properties(0).total_mem / 1024**3:.1f} GB" if torch.cuda.is_available() else "N/A",
         "gpu_memory_allocated": f"{torch.cuda.memory_allocated() / 1024**3:.1f} GB" if torch.cuda.is_available() else "N/A",
     }
 
@@ -205,7 +245,7 @@ async def analyze_multi_image(req: MultiImageAnalyzeRequest):
         images = [decode_base64_image(b64) for b64 in req.images_base64]
 
         user_content: list[dict] = []
-        for i, img in enumerate(images):
+        for img in images:
             user_content.append({"type": "image", "image": img})
         user_content.append({"type": "text", "text": req.prompt})
 
