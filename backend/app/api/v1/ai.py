@@ -2,13 +2,12 @@
 AI分析API
 包含 U-Net 分割（保留）和 MedGemma 影像分析（新增）
 """
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, Field
 from typing import Optional
 import numpy as np
-import base64
 
 from app.core.database import get_db
 from app.core.cache import get_cache, CacheManager
@@ -216,6 +215,165 @@ async def get_patient_ai_results(
         raise HTTPException(status_code=500, detail=f"查询AI结果失败: {str(e)}")
 
 
+# ==================== MedGemma 端点 ====================
+
+@router.get("/medgemma/health", response_model=dict)
+async def medgemma_health():
+    """
+    检查 MedGemma 推理服务器状态
+    """
+    status = await medgemma_service.health_check()
+    return {"success": True, "data": status}
+
+
+@router.post("/medgemma/analyze-image", response_model=dict)
+async def medgemma_analyze_image(
+    data: MedGemmaImageRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    cache: CacheManager = Depends(get_cache),
+):
+    """
+    MedGemma 影像分析 - 子宫内膜癌 MRI 专项报告
+    从 MinIO 加载影像后发送到 MedGemma 进行分析
+    """
+    try:
+        cached = await cache.get_ai_result(data.series_id, "medgemma_report")
+        if cached:
+            return {"success": True, "message": "使用缓存结果", "data": cached}
+
+        result = await db.execute(
+            select(MRISeries).where(MRISeries.id == data.series_id)
+        )
+        series = result.scalar_one_or_none()
+        if not series:
+            raise HTTPException(status_code=404, detail="影像序列不存在")
+
+        # TODO: 从 MinIO 加载真实 DICOM 影像并转换
+        # 当前使用模拟影像用于开发测试
+        demo_image = np.random.randint(0, 255, (256, 256), dtype=np.uint8)
+        image_b64 = medgemma_service.numpy_to_base64(demo_image)
+
+        analysis = await medgemma_service.analyze_mri_for_endometrial_cancer(
+            image_base64=image_b64,
+            clinical_context=data.clinical_context,
+        )
+
+        if not analysis.get("success"):
+            raise HTTPException(
+                status_code=502,
+                detail=f"MedGemma 分析失败: {analysis.get('error', '未知错误')}",
+            )
+
+        result_data = {
+            "series_id": data.series_id,
+            "patient_id": data.patient_id,
+            "report": analysis["content"],
+            "inference_time": analysis.get("inference_time", 0),
+            "model_id": analysis.get("model_id", ""),
+        }
+
+        await cache.set_ai_result(data.series_id, "medgemma_report", result_data)
+
+        background_tasks.add_task(
+            save_medgemma_report_to_db,
+            db, data.patient_id, data.series_id,
+            analysis["content"], data.clinical_context,
+            analysis.get("inference_time", 0),
+        )
+
+        return {"success": True, "message": "MedGemma 分析完成", "data": result_data}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"MedGemma 影像分析失败: {str(e)}")
+
+
+@router.post("/medgemma/analyze-prognosis", response_model=dict)
+async def medgemma_analyze_prognosis(
+    data: MedGemmaPrognosisRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    cache: CacheManager = Depends(get_cache),
+):
+    """
+    MedGemma 预后分析 - 基于临床数据的 LLM 预后评估
+    """
+    try:
+        cached = await cache.get_ai_result(data.patient_id, "medgemma_prognosis")
+        if cached:
+            return {"success": True, "message": "使用缓存结果", "data": cached}
+
+        analysis = await medgemma_service.predict_prognosis_with_llm(
+            clinical_data=data.clinical_data,
+        )
+
+        if not analysis.get("success"):
+            raise HTTPException(
+                status_code=502,
+                detail=f"MedGemma 预后分析失败: {analysis.get('error', '未知错误')}",
+            )
+
+        result_data = {
+            "patient_id": data.patient_id,
+            "report": analysis["content"],
+            "inference_time": analysis.get("inference_time", 0),
+            "model_id": analysis.get("model_id", ""),
+        }
+
+        await cache.set_ai_result(data.patient_id, "medgemma_prognosis", result_data)
+
+        background_tasks.add_task(
+            save_medgemma_prognosis_to_db,
+            db, data.patient_id,
+            analysis["content"], data.clinical_data,
+            analysis.get("inference_time", 0),
+        )
+
+        return {"success": True, "message": "MedGemma 预后分析完成", "data": result_data}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"MedGemma 预后分析失败: {str(e)}")
+
+
+@router.post("/medgemma/ask", response_model=dict)
+async def medgemma_freeform(data: MedGemmaFreeformRequest):
+    """
+    MedGemma 自由医学问答
+    支持纯文本问答或附带影像的问答
+    """
+    try:
+        if data.image_base64:
+            analysis = await medgemma_service.analyze_image(
+                image_base64=data.image_base64,
+                prompt=data.question,
+            )
+        else:
+            analysis = await medgemma_service.analyze_text(prompt=data.question)
+
+        if not analysis.get("success"):
+            raise HTTPException(
+                status_code=502,
+                detail=f"MedGemma 问答失败: {analysis.get('error', '未知错误')}",
+            )
+
+        return {
+            "success": True,
+            "data": {
+                "answer": analysis["content"],
+                "inference_time": analysis.get("inference_time", 0),
+            },
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"MedGemma 问答失败: {str(e)}")
+
+
 # ==================== 后台任务函数 ====================
 
 async def save_ai_result_to_db(
@@ -225,7 +383,7 @@ async def save_ai_result_to_db(
     analysis_type: str,
     result_data: dict
 ):
-    """保存AI结果到数据库"""
+    """保存 U-Net AI 结果到数据库"""
     try:
         ai_result = AIAnalysisResult(
             patient_id=patient_id,
@@ -249,7 +407,7 @@ async def save_prognosis_to_db(
     patient_id: int,
     prediction_result: dict
 ):
-    """保存预后预测结果到数据库"""
+    """保存传统回归预后预测结果到数据库"""
     try:
         ai_result = AIAnalysisResult(
             patient_id=patient_id,
@@ -268,4 +426,62 @@ async def save_prognosis_to_db(
     except Exception as e:
         await db.rollback()
         print(f"保存预后预测失败: {e}")
+
+
+async def save_medgemma_report_to_db(
+    db: AsyncSession,
+    patient_id: int,
+    series_id: int,
+    report_text: str,
+    clinical_context: Optional[str],
+    inference_time: float,
+):
+    """保存 MedGemma 影像分析报告到数据库"""
+    try:
+        from app.config import settings
+        ai_result = AIAnalysisResult(
+            patient_id=patient_id,
+            series_id=series_id,
+            analysis_type="medgemma_report",
+            report_text=report_text,
+            clinical_context=clinical_context,
+            model_name="MedGemma",
+            model_version=settings.MEDGEMMA_MODEL_ID,
+            inference_time=inference_time,
+        )
+
+        db.add(ai_result)
+        await db.commit()
+
+    except Exception as e:
+        await db.rollback()
+        print(f"保存 MedGemma 报告失败: {e}")
+
+
+async def save_medgemma_prognosis_to_db(
+    db: AsyncSession,
+    patient_id: int,
+    report_text: str,
+    clinical_data: dict,
+    inference_time: float,
+):
+    """保存 MedGemma 预后分析结果到数据库"""
+    try:
+        from app.config import settings
+        ai_result = AIAnalysisResult(
+            patient_id=patient_id,
+            analysis_type="medgemma_prognosis",
+            report_text=report_text,
+            findings=clinical_data,
+            model_name="MedGemma",
+            model_version=settings.MEDGEMMA_MODEL_ID,
+            inference_time=inference_time,
+        )
+
+        db.add(ai_result)
+        await db.commit()
+
+    except Exception as e:
+        await db.rollback()
+        print(f"保存 MedGemma 预后分析失败: {e}")
 
