@@ -205,6 +205,12 @@ async def get_patient_ai_results(
                     "risk_level": r.risk_level,
                     "recurrence_probability": r.recurrence_probability,
                     "survival_prediction": r.survival_prediction,
+                    "report_text": r.report_text,
+                    "findings": r.findings,
+                    "diagnosis_suggestions": r.diagnosis_suggestions,
+                    "model_name": r.model_name,
+                    "model_version": r.model_version,
+                    "inference_time": r.inference_time,
                     "created_at": r.created_at.isoformat() if r.created_at else None,
                 }
                 for r in results
