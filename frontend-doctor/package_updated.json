@@ -1,0 +1,38 @@
+{
+  "name": "endometrial-cancer-doctor-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "青海子宫内膜癌智能诊疗平台 - 医生端",
+  "scripts": {
+    "start": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint src --ext .js,.jsx,.ts,.tsx"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.0",
+    "antd": "^5.20.0",
+    "@ant-design/icons": "^5.4.0",
+    "@ant-design/pro-components": "^2.7.15",
+    "axios": "^1.7.4",
+    "dayjs": "^1.11.13",
+    "zustand": "^4.5.5",
+    "cornerstone-core": "^2.6.1",
+    "cornerstone-wado-image-loader": "^4.1.3",
+    "dicom-parser": "^1.8.21",
+    "echarts": "^5.5.1",
+    "echarts-for-react": "^3.0.2"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.0",
+    "eslint": "^9.9.0",
+    "prettier": "^3.3.3"
+  }
+}
+

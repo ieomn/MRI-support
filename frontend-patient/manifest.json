@@ -1,0 +1,26 @@
+{
+  "name": "子宫内膜癌随访",
+  "appid": "",
+  "description": "青海子宫内膜癌智能诊疗平台 - 患者端",
+  "versionName": "1.0.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "app-plus": {
+    "usingComponents": true
+  },
+  "h5": {
+    "title": "随访管理",
+    "router": {
+      "mode": "hash",
+      "base": "/"
+    }
+  },
+  "mp-weixin": {
+    "appid": "",
+    "setting": {
+      "urlCheck": false
+    },
+    "usingComponents": true
+  }
+}
+
