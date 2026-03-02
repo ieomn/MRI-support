@@ -84,21 +84,27 @@ class AIAnalysisResult(Base):
     patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False, index=True)
     series_id = Column(Integer, ForeignKey("mri_series.id"), index=True)
     
-    # 分析类型
-    analysis_type = Column(String(50), nullable=False, comment="分析类型(segmentation/prediction)")
+    # 分析类型: segmentation / prediction / medgemma_report / medgemma_prognosis
+    analysis_type = Column(String(50), nullable=False, comment="分析类型")
     
-    # 分割结果
+    # U-Net 分割结果（保留）
     segmentation_mask_path = Column(String(500), comment="分割掩码文件路径")
     tumor_volume = Column(Float, comment="肿瘤体积(cm³)")
     
     # 影像组学特征
     radiomics_features = Column(JSON, comment="影像组学特征")
     
-    # 预后预测结果
+    # 传统回归预后预测结果（保留）
     prognosis_score = Column(Float, comment="预后评分")
     risk_level = Column(String(20), comment="风险等级(low/medium/high)")
     recurrence_probability = Column(Float, comment="复发概率")
     survival_prediction = Column(JSON, comment="生存期预测")
+    
+    # MedGemma 分析结果
+    report_text = Column(Text, comment="MedGemma 生成的分析报告全文")
+    findings = Column(JSON, comment="结构化影像发现")
+    diagnosis_suggestions = Column(JSON, comment="诊断建议")
+    clinical_context = Column(Text, comment="输入的临床上下文信息")
     
     # 模型信息
     model_name = Column(String(100), comment="模型名称")

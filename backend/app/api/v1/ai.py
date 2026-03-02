@@ -1,18 +1,21 @@
 """
 AI分析API
+包含 U-Net 分割（保留）和 MedGemma 影像分析（新增）
 """
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 import numpy as np
+import base64
 
 from app.core.database import get_db
 from app.core.cache import get_cache, CacheManager
 from app.models.image import MRISeries, AIAnalysisResult
 from app.ml.unet_model import unet_service
 from app.ml.regression_model import regression_service
+from app.ml.medgemma_service import medgemma_service
 
 router = APIRouter()
 
@@ -20,15 +23,36 @@ router = APIRouter()
 # ==================== Pydantic模型 ====================
 
 class SegmentationRequest(BaseModel):
-    """分割请求"""
+    """U-Net 分割请求"""
     series_id: int
     threshold: float = 0.5
 
 
 class PrognosisRequest(BaseModel):
-    """预后预测请求"""
+    """传统回归预后预测请求"""
     patient_id: int
     clinical_data: dict
+
+
+class MedGemmaImageRequest(BaseModel):
+    """MedGemma 影像分析请求"""
+    series_id: int
+    patient_id: int
+    clinical_context: Optional[str] = Field(None, description="临床上下文信息（可选）")
+    prompt: Optional[str] = Field(None, description="自定义分析指令（可选）")
+
+
+class MedGemmaPrognosisRequest(BaseModel):
+    """MedGemma 预后分析请求"""
+    patient_id: int
+    clinical_data: dict
+
+
+class MedGemmaFreeformRequest(BaseModel):
+    """MedGemma 自由问答请求"""
+    question: str = Field(..., description="医学问题")
+    patient_id: Optional[int] = Field(None, description="关联患者ID（可选）")
+    image_base64: Optional[str] = Field(None, description="Base64 编码的影像（可选）")
 
 
 # ==================== API端点 ====================
