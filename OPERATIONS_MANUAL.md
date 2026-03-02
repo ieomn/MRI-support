@@ -109,12 +109,19 @@ scp -P <端口> -r inference_server/ root@<AutoDL地址>:/root/
 SSH 连接到 AutoDL 实例后：
 
 ```bash
+# 设置 HuggingFace 国内镜像（AutoDL 必须，否则无法连接 huggingface.co）
+export HF_ENDPOINT=https://hf-mirror.com
+
 # 设置 HuggingFace Token（替换为你的实际 Token）
 export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 # 写入 bashrc 使其持久化
+echo 'export HF_ENDPOINT=https://hf-mirror.com' >> ~/.bashrc
 echo 'export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"' >> ~/.bashrc
 ```
+
+> **关键**：`HF_ENDPOINT` 是解决国内服务器无法访问 HuggingFace 的核心配置。
+> `start.sh` 脚本会自动设置此变量，但手动写入 `~/.bashrc` 可确保持久化。
 
 ### 3.5 启动推理服务
 
@@ -123,10 +130,15 @@ cd /root/inference_server
 bash start.sh
 ```
 
-首次启动会自动下载模型权重（约 15-20GB），请耐心等待。下载完成后会看到：
+脚本会自动：
+- 配置 HuggingFace 国内镜像
+- 测试镜像连通性（不通则自动切换备用镜像）
+- 根据 GPU 显存自动决定是否启用量化（>=60GB 不量化，<60GB 开启 4-bit 量化）
+
+首次启动会下载模型权重（约 15-50GB），请耐心等待。下载完成后会看到：
 
 ```
-MedGemma 模型加载完成
+MedGemma 模型加载完成 (GPU 显存占用: xx.x GB)
 INFO:     Uvicorn running on http://0.0.0.0:8080
 ```
 
@@ -500,9 +512,11 @@ POST /api/v1/ai/medgemma/ask
 
 | 错误 | 原因 | 解决 |
 |------|------|------|
-| `OutOfMemoryError` | GPU 显存不足 | 确认使用 A100 GPU，且 `USE_QUANTIZATION=True` |
-| `401 Unauthorized` | HuggingFace Token 无效 | 检查 `HF_TOKEN` 环境变量，确认已接受模型使用条款 |
-| 模型下载慢 | 网络问题 | AutoDL 实例建议开启学术加速，或设置 `HF_ENDPOINT=https://hf-mirror.com` |
+| `Network is unreachable` / 连接超时 | 国内服务器无法访问 huggingface.co | 设置 `export HF_ENDPOINT=https://hf-mirror.com`（start.sh 已自动处理） |
+| `OutOfMemoryError` | GPU 显存不足 | 设置 `export USE_QUANTIZATION=true` 启用 4-bit 量化 |
+| `401 Unauthorized` | HuggingFace Token 无效 | 检查 `HF_TOKEN` 环境变量，确认已在 HF 页面接受模型使用条款 |
+| `RuntimeError: client has been closed` | HF 库网络重试失败 | 确认 `HF_ENDPOINT` 已设置为镜像地址 |
+| 模型下载慢 | 镜像速度波动 | 首次下载 27B 约需 10-30 分钟，耐心等待 |
 | `CUDA out of memory` | 推理时显存溢出 | 减少 `max_new_tokens`，或限制输入图片数量 |
 
 ### 8.3 前端问题

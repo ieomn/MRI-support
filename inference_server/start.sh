@@ -12,10 +12,17 @@ echo "=========================================="
 echo "[1/5] 检查 GPU..."
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
-# 配置 HuggingFace 国内镜像（AutoDL 等国内服务器必须）
-echo "[2/5] 配置 HuggingFace 镜像..."
+# 配置 HuggingFace 国内镜像 + 缓存路径
+echo "[2/5] 配置 HuggingFace..."
 export HF_ENDPOINT=https://hf-mirror.com
-echo "已设置 HF_ENDPOINT=$HF_ENDPOINT"
+export HF_HOME=/root/autodl-tmp/hf_cache
+export HF_HUB_DISABLE_XET=1
+export HF_HUB_DOWNLOAD_TIMEOUT=1800
+mkdir -p "$HF_HOME"
+echo "  镜像:  $HF_ENDPOINT"
+echo "  缓存:  $HF_HOME (数据盘)"
+echo "  XET:   已禁用 (避免 CDN 403)"
+echo "  超时:  1800s"
 
 # 安装依赖
 echo "[3/5] 安装依赖..."
@@ -43,12 +50,13 @@ else
     echo "已切换到备用镜像: $HF_ENDPOINT"
 fi
 
-# 启动服务
+# 启动服务（AutoDL 仅映射 6006 和 6008 端口到公网）
+PORT=${INFERENCE_PORT:-6006}
 echo "[5/5] 启动推理服务..."
 echo "=========================================="
-echo "  服务地址: http://0.0.0.0:8080"
-echo "  健康检查: http://0.0.0.0:8080/health"
-echo "  API 文档: http://0.0.0.0:8080/docs"
+echo "  本地地址: http://0.0.0.0:${PORT}"
+echo "  健康检查: http://0.0.0.0:${PORT}/health"
+echo "  API 文档: http://0.0.0.0:${PORT}/docs"
 echo "=========================================="
 
-python server.py
+python server.py --port $PORT

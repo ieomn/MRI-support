@@ -266,4 +266,8 @@ async def analyze_multi_image(req: MultiImageAnalyzeRequest):
 
 
 if __name__ == "__main__":
-    uvicorn.run("server:app", host="0.0.0.0", port=8080, workers=1)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=6006, help="监听端口 (AutoDL 映射 6006/6008)")
+    args = parser.parse_args()
+    uvicorn.run("server:app", host="0.0.0.0", port=args.port, workers=1)
