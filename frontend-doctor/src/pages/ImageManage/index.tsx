@@ -60,7 +60,7 @@ const ImageManage: React.FC = () => {
   const uploadProps: UploadProps = {
     name: 'files',
     multiple: true,
-    accept: '.dcm,.dicom',
+    accept: '.dcm,.dicom,.nii,.nii.gz',
     disabled: !selectedPatient,
     customRequest: async ({ file, onSuccess, onError }) => {
       if (!selectedPatient) return;
@@ -68,7 +68,12 @@ const ImageManage: React.FC = () => {
         const dt = new DataTransfer();
         dt.items.add(file as File);
         const res: any = await imageAPI.upload(selectedPatient, dt.files);
-        if (res.success) { message.success('上传成功'); onSuccess?.(res); loadImages(); }
+        if (res.success) {
+          const fmt = res.data?.format;
+          message.success(fmt === 'NIfTI' ? `NIfTI 上传成功，提取 ${res.data.slice_count} 个切面` : '上传成功');
+          onSuccess?.(res);
+          loadImages();
+        }
       } catch (e) { message.error('上传失败'); onError?.(e as Error); }
     },
   };
@@ -76,7 +81,21 @@ const ImageManage: React.FC = () => {
   const columns = [
     { title: '序列 UID', dataIndex: 'series_uid', key: 'series_uid', ellipsis: true },
     { title: '成像方式', dataIndex: 'modality', key: 'modality', width: 100 },
-    { title: '序列描述', dataIndex: 'series_description', key: 'series_description', ellipsis: true },
+    {
+      title: '序列描述',
+      dataIndex: 'series_description',
+      key: 'series_description',
+      ellipsis: true,
+      render: (desc: string) => {
+        const isNifti = desc?.startsWith('NIfTI:');
+        return (
+          <Space>
+            {isNifti && <Tag color="geekblue">NIfTI</Tag>}
+            <span>{desc}</span>
+          </Space>
+        );
+      },
+    },
     { title: '文件数', dataIndex: 'file_count', key: 'file_count', width: 80 },
     {
       title: '层厚',
@@ -134,7 +153,7 @@ const ImageManage: React.FC = () => {
               options={patients.map((p) => ({ value: p.id, label: `${p.patient_no} - ${p.name}` }))}
             />
             <Upload {...uploadProps}>
-              <Button icon={<UploadOutlined />} disabled={!selectedPatient}>上传 DICOM</Button>
+              <Button icon={<UploadOutlined />} disabled={!selectedPatient}>上传影像 (DICOM/NIfTI)</Button>
             </Upload>
             <Button icon={<ReloadOutlined />} onClick={loadImages}>刷新</Button>
           </Space>
