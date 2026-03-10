@@ -1,7 +1,7 @@
 /**
  * 患者列表页面 (F-CD-01)
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Card,
   Table,
@@ -39,8 +39,7 @@ const PatientList: React.FC = () => {
   const [createModalVisible, setCreateModalVisible] = useState(false);
   const [form] = Form.useForm();
 
-  // 加载患者列表
-  const loadPatients = async () => {
+  const loadPatients = useCallback(async () => {
     setLoading(true);
     try {
       const response: any = await patientAPI.list({
@@ -52,17 +51,19 @@ const PatientList: React.FC = () => {
       if (response.success) {
         setPatients(response.data.items);
         setTotal(response.data.total);
+      } else {
+        message.error(response.message || '加载患者列表失败');
       }
     } catch (error) {
       console.error('加载患者列表失败:', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, pageSize, keyword]);
 
   useEffect(() => {
     loadPatients();
-  }, [page, pageSize, keyword]);
+  }, [loadPatients]);
 
   // 表格列定义
   const columns: ColumnsType<Patient> = [

@@ -1,7 +1,7 @@
 """
 随访数据模型
 """
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, JSON, Enum
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, JSON, Enum, text
 from sqlalchemy.sql import func
 from app.core.database import Base
 import enum
@@ -37,7 +37,7 @@ class FollowUpPlan(Base):
     doctor_name = Column(String(100), comment="创建医生姓名")
     
     # 状态
-    is_active = Column(Integer, default=1, comment="是否激活")
+    is_active = Column(Integer, server_default=text("1"), comment="是否激活")
     
     # 系统字段
     created_at = Column(DateTime, server_default=func.now())

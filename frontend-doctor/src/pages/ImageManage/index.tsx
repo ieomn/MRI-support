@@ -14,7 +14,7 @@ const ImageManage: React.FC = () => {
   const [selectedPatient, setSelectedPatient] = useState<number | null>(null);
   const [images, setImages] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [actionLoading, setActionLoading] = useState<number | null>(null);
+  const [actionLoading, setActionLoading] = useState<{ id: number; type: string } | null>(null);
 
   const loadPatients = useCallback(async () => {
     try {
@@ -37,20 +37,22 @@ const ImageManage: React.FC = () => {
   useEffect(() => { loadImages(); }, [loadImages]);
 
   const handleSegmentation = async (seriesId: number) => {
-    setActionLoading(seriesId);
+    setActionLoading({ id: seriesId, type: 'unet' });
     try {
       const res: any = await aiAPI.runSegmentation({ series_id: seriesId });
       if (res.success) message.success('U-Net 分割完成');
+      else message.error(res.message || '分割失败');
     } catch { /* interceptor */ }
     finally { setActionLoading(null); }
   };
 
   const handleMedGemma = async (seriesId: number) => {
     if (!selectedPatient) return;
-    setActionLoading(seriesId);
+    setActionLoading({ id: seriesId, type: 'medgemma' });
     try {
       const res: any = await medgemmaAPI.analyzeImage({ series_id: seriesId, patient_id: selectedPatient });
       if (res.success) message.success('MedGemma 分析完成');
+      else message.error(res.message || '分析失败');
     } catch { /* interceptor */ }
     finally { setActionLoading(null); }
   };
@@ -96,7 +98,7 @@ const ImageManage: React.FC = () => {
           <Button
             size="small"
             icon={<ThunderboltOutlined />}
-            loading={actionLoading === record.id}
+            loading={actionLoading?.id === record.id && actionLoading?.type === 'unet'}
             onClick={() => handleSegmentation(record.id)}
           >
             U-Net
@@ -105,7 +107,7 @@ const ImageManage: React.FC = () => {
             type="primary"
             size="small"
             icon={<RobotOutlined />}
-            loading={actionLoading === record.id}
+            loading={actionLoading?.id === record.id && actionLoading?.type === 'medgemma'}
             onClick={() => handleMedGemma(record.id)}
           >
             MedGemma

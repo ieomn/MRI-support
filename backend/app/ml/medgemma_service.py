@@ -246,7 +246,8 @@ class MedGemmaService:
     # ==================== 内部方法 ====================
 
     async def _post_with_retry(self, endpoint: str, payload: dict) -> dict:
-        """带重试的 POST 请求"""
+        """带重试和指数退避的 POST 请求"""
+        import asyncio
         last_error = None
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -264,6 +265,9 @@ class MedGemmaService:
             except Exception as e:
                 last_error = str(e)
                 logger.error(f"MedGemma 请求异常: {e}")
+
+            if attempt < self.max_retries:
+                await asyncio.sleep(2 ** attempt)
 
         return {"success": False, "content": "", "error": last_error}
 

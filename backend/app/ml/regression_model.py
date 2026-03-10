@@ -84,7 +84,13 @@ class PrognosisRegressionService:
         features.append(stage_map.get(stage, 2))
         
         grade = patient_data.get('grade', 2)
-        features.append(int(grade) if isinstance(grade, (int, str)) else 2)
+        if isinstance(grade, int):
+            features.append(grade)
+        elif isinstance(grade, str):
+            digits = ''.join(c for c in grade if c.isdigit())
+            features.append(int(digits) if digits else 2)
+        else:
+            features.append(2)
         
         features.append(patient_data.get('tumor_size', 3.0))
         features.append(patient_data.get('lymph_node_positive', 0))

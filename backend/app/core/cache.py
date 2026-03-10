@@ -124,11 +124,16 @@ class CacheManager:
             f"patient:info:{patient_id}",
             f"patient:detail:{patient_id}",
             f"ai:prediction:{patient_id}",
+            f"ai:medgemma_prognosis:{patient_id}",
         ]
-        # 同时清除患者列表缓存
-        list_keys = await self.redis.keys("patient:list:*")
-        keys.extend([k.decode() if isinstance(k, bytes) else k for k in list_keys])
-        await self.delete(*keys)
+        if keys:
+            await self.delete(*keys)
+        
+        # 用 scan_iter 替代 KEYS，避免阻塞 Redis
+        async for key in self.redis.scan_iter(match="patient:list:*", count=100):
+            await self.redis.delete(key)
+        async for key in self.redis.scan_iter(match=f"ai:*:{patient_id}", count=100):
+            await self.redis.delete(key)
         logger.info(f"已清除患者 {patient_id} 的所有缓存")
     
     async def get_dicom_metadata(self, series_id: str) -> Optional[dict]:

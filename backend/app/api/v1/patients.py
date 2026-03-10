@@ -4,6 +4,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from typing import Optional
 from datetime import date
 
@@ -67,45 +68,52 @@ async def create_patient(
     """
     创建新患者病例 (F-DM-01)
     """
-    try:
-        # 生成患者编号
-        result = await db.execute(select(func.count(Patient.id)))
-        count = result.scalar()
-        patient_no = f"EC{date.today().strftime('%Y%m%d')}{count + 1:04d}"
-        
-        # 创建患者记录
-        patient = Patient(
-            patient_no=patient_no,
-            name=patient_data.name,
-            gender=patient_data.gender,
-            birth_date=patient_data.birth_date,
-            phone=patient_data.phone,
-            address=patient_data.address,
-            admission_date=patient_data.admission_date,
-            hospital=patient_data.hospital,
-            diagnosis=patient_data.diagnosis,
-            stage=patient_data.stage,
-        )
-        
-        db.add(patient)
-        await db.commit()
-        await db.refresh(patient)
-        
-        # 写入缓存并清除列表缓存（使列表刷新）
-        await cache.set_patient_info(patient.id, patient.to_dict())
-        list_keys = await cache.redis.keys("patient:list:*")
-        if list_keys:
-            await cache.redis.delete(*list_keys)
-        
-        return {
-            "success": True,
-            "message": "患者创建成功",
-            "data": patient.to_dict()
-        }
-        
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"创建患者失败: {str(e)}")
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            result = await db.execute(select(func.count(Patient.id)))
+            count = result.scalar()
+            patient_no = f"EC{date.today().strftime('%Y%m%d')}{count + 1 + attempt:04d}"
+            
+            patient = Patient(
+                patient_no=patient_no,
+                name=patient_data.name,
+                gender=patient_data.gender,
+                birth_date=patient_data.birth_date,
+                phone=patient_data.phone,
+                address=patient_data.address,
+                admission_date=patient_data.admission_date,
+                hospital=patient_data.hospital,
+                diagnosis=patient_data.diagnosis,
+                stage=patient_data.stage,
+            )
+            
+            db.add(patient)
+            await db.commit()
+            await db.refresh(patient)
+            
+            # 清除列表缓存（使列表刷新）
+            try:
+                await cache.set_patient_info(patient.id, patient.to_dict())
+                async for key in cache.redis.scan_iter(match="patient:list:*", count=100):
+                    await cache.redis.delete(key)
+            except Exception:
+                pass
+            
+            return {
+                "success": True,
+                "message": "患者创建成功",
+                "data": patient.to_dict()
+            }
+            
+        except IntegrityError:
+            await db.rollback()
+            if attempt == max_attempts - 1:
+                raise HTTPException(status_code=500, detail="创建患者失败: 编号冲突，请重试")
+            continue
+        except Exception as e:
+            await db.rollback()
+            raise HTTPException(status_code=500, detail=f"创建患者失败: {str(e)}")
 
 
 @router.get("/", response_model=dict)
@@ -121,8 +129,6 @@ async def list_patients(
     支持分页和搜索
     """
     try:
-        # 尝试从缓存获取
-        cache_key = f"patient_list_{page}_{page_size}_{keyword or ''}"
         cached = await cache.get_cached_list("patient", page, page_size)
         if cached and not keyword:
             return cached

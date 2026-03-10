@@ -36,7 +36,6 @@ function attachInterceptors(instance: AxiosInstance) {
         if (status === 401) {
           message.error('未授权，请重新登录');
           localStorage.removeItem('token');
-          window.location.href = '/login';
         } else if (status === 502) {
           message.error('AI 推理服务暂不可用，请稍后重试');
         } else if (status === 500) {

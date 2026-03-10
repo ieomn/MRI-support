@@ -84,17 +84,17 @@ const ReportViewer: React.FC<{
 const PatientDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const patientId = parseInt(id || '0');
+  const patientId = Number(id);
 
   const [patient, setPatient] = useState<any>(null);
   const [images, setImages] = useState<any[]>([]);
   const [aiResults, setAiResults] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [segLoadingId, setSegLoadingId] = useState<number | null>(null);
 
   const [followupTasks, setFollowupTasks] = useState<any[]>([]);
 
   // MedGemma 状态
-  const [mgImageLoading, setMgImageLoading] = useState(false);
+  const [mgImageLoadingId, setMgImageLoadingId] = useState<number | null>(null);
   const [mgProgLoading, setMgProgLoading] = useState(false);
   const [mgAskLoading, setMgAskLoading] = useState(false);
   const [mgImageReport, setMgImageReport] = useState<any>(null);
@@ -103,6 +103,17 @@ const PatientDetail: React.FC = () => {
 
   const [progForm] = Form.useForm();
   const [question, setQuestion] = useState('');
+
+  useEffect(() => {
+    setMgImageReport(null);
+    setMgProgReport(null);
+    setMgAnswer(null);
+    setQuestion('');
+    setPatient(null);
+    setImages([]);
+    setAiResults([]);
+    setFollowupTasks([]);
+  }, [patientId]);
 
   // ========== 数据加载 ==========
 
@@ -146,21 +157,23 @@ const PatientDetail: React.FC = () => {
   // ========== U-Net 分割 ==========
 
   const handleRunSegmentation = async (seriesId: number) => {
-    setLoading(true);
+    setSegLoadingId(seriesId);
     try {
       const res: any = await aiAPI.runSegmentation({ series_id: seriesId, threshold: 0.5 });
       if (res.success) {
         message.success('U-Net 分割完成');
         loadAIResults();
+      } else {
+        message.error(res.message || '分割失败');
       }
     } catch { /* interceptor */ }
-    finally { setLoading(false); }
+    finally { setSegLoadingId(null); }
   };
 
   // ========== MedGemma 影像分析 ==========
 
   const handleMedGemmaImage = async (seriesId: number) => {
-    setMgImageLoading(true);
+    setMgImageLoadingId(seriesId);
     setMgImageReport(null);
     try {
       const clinicalContext = patient
@@ -178,7 +191,7 @@ const PatientDetail: React.FC = () => {
         loadAIResults();
       }
     } catch { /* interceptor */ }
-    finally { setMgImageLoading(false); }
+    finally { setMgImageLoadingId(null); }
   };
 
   // ========== MedGemma 预后分析 ==========
@@ -291,7 +304,7 @@ const PatientDetail: React.FC = () => {
       dataIndex: 'report_text',
       key: 'report_text',
       ellipsis: true,
-      render: (text: string) => text ? <Text type="secondary">{text.slice(0, 80)}...</Text> : '-',
+      render: (text: string) => text ? <Text type="secondary">{text.length > 80 ? `${text.slice(0, 80)}…` : text}</Text> : '-',
     },
     {
       title: '时间',
@@ -303,10 +316,16 @@ const PatientDetail: React.FC = () => {
 
   // ========== Tab 定义 ==========
 
+  if (!id || Number.isNaN(patientId)) {
+    return <Alert type="error" message="无效的患者 ID" showIcon style={{ margin: 24 }} />;
+  }
+
   if (!patient) {
     return (
       <div style={{ padding: 24, textAlign: 'center' }}>
-        <Spin size="large" tip="加载中..." />
+        <Spin size="large" tip="加载中...">
+          <div style={{ padding: 50 }} />
+        </Spin>
       </div>
     );
   }
@@ -359,7 +378,7 @@ const PatientDetail: React.FC = () => {
                       size="small"
                       icon={<ThunderboltOutlined />}
                       onClick={() => handleRunSegmentation(record.id)}
-                      loading={loading}
+                      loading={segLoadingId === record.id}
                     >
                       U-Net 分割
                     </Button>
@@ -368,7 +387,7 @@ const PatientDetail: React.FC = () => {
                       size="small"
                       icon={<RobotOutlined />}
                       onClick={() => handleMedGemmaImage(record.id)}
-                      loading={mgImageLoading}
+                      loading={mgImageLoadingId === record.id}
                     >
                       MedGemma 分析
                     </Button>
