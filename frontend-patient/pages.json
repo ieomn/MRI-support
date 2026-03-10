@@ -1,0 +1,52 @@
+{
+  "pages": [
+    {
+      "path": "pages/index/index",
+      "style": {
+        "navigationBarTitleText": "康复随访"
+      }
+    },
+    {
+      "path": "pages/login/login",
+      "style": {
+        "navigationBarTitleText": "患者登录"
+      }
+    },
+    {
+      "path": "pages/task/task",
+      "style": {
+        "navigationBarTitleText": "任务详情"
+      }
+    },
+    {
+      "path": "pages/health/health",
+      "style": {
+        "navigationBarTitleText": "健康问卷"
+      }
+    },
+    {
+      "path": "pages/report/report",
+      "style": {
+        "navigationBarTitleText": "上传报告"
+      }
+    },
+    {
+      "path": "pages/history/history",
+      "style": {
+        "navigationBarTitleText": "随访记录"
+      }
+    },
+    {
+      "path": "pages/contact/contact",
+      "style": {
+        "navigationBarTitleText": "联系医生"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "康复随访",
+    "navigationBarBackgroundColor": "#667eea",
+    "backgroundColor": "#f5f5f5"
+  }
+}
