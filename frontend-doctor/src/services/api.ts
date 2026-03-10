@@ -82,16 +82,26 @@ export interface PatientCreateData {
   stage?: string;
 }
 
+export interface ReportSection {
+  title: string;
+  content: string;
+}
+
 export interface MedGemmaReport {
   series_id?: number;
   patient_id: number;
   report: string;
+  summary?: string;
+  sections?: ReportSection[];
+  format?: string;
   inference_time: number;
   model_id: string;
 }
 
 export interface MedGemmaAnswer {
   answer: string;
+  summary?: string;
+  sections?: ReportSection[];
   inference_time: number;
 }
 
