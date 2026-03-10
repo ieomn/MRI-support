@@ -240,7 +240,7 @@ async def medgemma_analyze_image(
 ):
     """
     MedGemma 影像分析 - 子宫内膜癌 MRI 专项报告
-    从 MinIO 加载影像后发送到 MedGemma 进行分析
+    自动检测 NIfTI/DICOM 格式并选择单图或多切面分析
     """
     try:
         cached = await cache.get_ai_result(data.series_id, "medgemma_report")
@@ -254,15 +254,18 @@ async def medgemma_analyze_image(
         if not series:
             raise HTTPException(status_code=404, detail="影像序列不存在")
 
-        # TODO: 从 MinIO 加载真实 DICOM 影像并转换
-        # 当前使用模拟影像用于开发测试
-        demo_image = np.random.randint(0, 255, (256, 256), dtype=np.uint8)
-        image_b64 = medgemma_service.numpy_to_base64(demo_image)
+        meta = series.image_metadata or {}
+        is_nifti = meta.get("format") == "NIfTI"
 
-        analysis = await medgemma_service.analyze_mri_for_endometrial_cancer(
-            image_base64=image_b64,
-            clinical_context=data.clinical_context,
-        )
+        if is_nifti:
+            analysis = await _analyze_nifti_series(series, data.clinical_context, cache)
+        else:
+            demo_image = np.random.randint(0, 255, (256, 256), dtype=np.uint8)
+            image_b64 = medgemma_service.numpy_to_base64(demo_image)
+            analysis = await medgemma_service.analyze_mri_for_endometrial_cancer(
+                image_base64=image_b64,
+                clinical_context=data.clinical_context,
+            )
 
         if not analysis.get("success"):
             raise HTTPException(
@@ -270,10 +273,15 @@ async def medgemma_analyze_image(
                 detail=f"MedGemma 分析失败: {analysis.get('error', '未知错误')}",
             )
 
+        structured = medgemma_service.parse_structured_report(analysis["content"])
+
         result_data = {
             "series_id": data.series_id,
             "patient_id": data.patient_id,
-            "report": analysis["content"],
+            "report": structured["raw"],
+            "summary": structured["summary"],
+            "sections": structured["sections"],
+            "format": "NIfTI" if is_nifti else "DICOM",
             "inference_time": analysis.get("inference_time", 0),
             "model_id": analysis.get("model_id", ""),
         }
@@ -293,6 +301,28 @@ async def medgemma_analyze_image(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"MedGemma 影像分析失败: {str(e)}")
+
+
+async def _analyze_nifti_series(
+    series: MRISeries,
+    clinical_context: Optional[str],
+    cache: CacheManager,
+) -> dict:
+    """从缓存中获取 NIfTI 切片并发送给 MedGemma 多图分析"""
+    cached_meta = await cache.get_dicom_metadata(series.series_uid)
+    nifti_slices = (cached_meta or {}).get("nifti_slices")
+
+    if not nifti_slices:
+        raise HTTPException(
+            status_code=404,
+            detail="NIfTI 切片缓存已过期，请重新上传影像",
+        )
+
+    return await medgemma_service.analyze_nifti_volume(
+        images_base64=nifti_slices["images_base64"],
+        planes=nifti_slices["planes"],
+        clinical_context=clinical_context,
+    )
 
 
 @router.post("/medgemma/analyze-prognosis", response_model=dict)
@@ -322,10 +352,13 @@ async def medgemma_analyze_prognosis(
 
         report_text = analysis["content"]
         parsed = _parse_prognosis_report(report_text)
+        structured = medgemma_service.parse_structured_report(report_text)
 
         result_data = {
             "patient_id": data.patient_id,
-            "report": report_text,
+            "report": structured["raw"],
+            "summary": structured["summary"],
+            "sections": structured["sections"],
             "inference_time": analysis.get("inference_time", 0),
             "model_id": analysis.get("model_id", ""),
             **parsed,
@@ -369,10 +402,15 @@ async def medgemma_freeform(data: MedGemmaFreeformRequest):
                 detail=f"MedGemma 问答失败: {analysis.get('error', '未知错误')}",
             )
 
+        raw_answer = analysis["content"]
+        structured = medgemma_service.parse_structured_report(raw_answer)
+
         return {
             "success": True,
             "data": {
-                "answer": analysis["content"],
+                "answer": raw_answer,
+                "summary": structured["summary"],
+                "sections": structured["sections"],
                 "inference_time": analysis.get("inference_time", 0),
             },
         }
