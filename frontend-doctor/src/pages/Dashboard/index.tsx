@@ -10,6 +10,16 @@ import {
 import ReactECharts from 'echarts-for-react';
 import { patientAPI, followupAPI, medgemmaAPI } from '../../services/api';
 
+const SafeECharts: React.FC<React.ComponentProps<typeof ReactECharts>> = (props) => {
+  const ref = React.useRef<any>(null);
+  React.useEffect(() => {
+    return () => {
+      try { ref.current?.getEchartsInstance()?.dispose(); } catch { /* StrictMode guard */ }
+    };
+  }, []);
+  return <ReactECharts ref={ref} {...props} />;
+};
+
 const { Title } = Typography;
 
 const Dashboard: React.FC = () => {
@@ -128,14 +138,14 @@ const Dashboard: React.FC = () => {
         <Col span={12}>
           <Card title="患者分期分布">
             {Object.keys(stats.stages).length > 0
-              ? <ReactECharts option={stageChartOption} style={{ height: 300 }} />
+              ? <SafeECharts option={stageChartOption} style={{ height: 300 }} />
               : <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>暂无分期数据</div>
             }
           </Card>
         </Col>
         <Col span={12}>
           <Card title="随访任务统计">
-            <ReactECharts option={taskBarOption} style={{ height: 300 }} />
+            <SafeECharts option={taskBarOption} style={{ height: 300 }} />
           </Card>
         </Col>
       </Row>

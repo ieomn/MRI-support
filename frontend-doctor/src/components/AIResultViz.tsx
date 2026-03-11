@@ -2,7 +2,7 @@
  * AI 分析结果可视化组件
  * 包含风险仪表盘、生存率折线图、报告展示
  */
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import { Card, Tag, Space, Typography, Divider, Progress, Row, Col, Statistic } from 'antd';
 import {
   CheckCircleOutlined,
@@ -15,6 +15,27 @@ import {
 import ReactECharts from 'echarts-for-react';
 
 const { Text, Paragraph } = Typography;
+
+/**
+ * echarts-for-react 3.x 在 React StrictMode 下存在
+ * ResizeObserver.disconnect 被双重调用导致 crash 的问题。
+ * 此包装组件通过手动控制 dispose 规避该问题。
+ */
+const SafeECharts: React.FC<React.ComponentProps<typeof ReactECharts>> = (props) => {
+  const ref = useRef<any>(null);
+
+  useEffect(() => {
+    return () => {
+      try {
+        ref.current?.getEchartsInstance()?.dispose();
+      } catch {
+        // ignore dispose errors in StrictMode double-unmount
+      }
+    };
+  }, []);
+
+  return <ReactECharts ref={ref} {...props} />;
+};
 
 // ==================== 风险仪表盘 ====================
 
@@ -60,7 +81,7 @@ export const RiskGauge: React.FC<{ score: number; level: string }> = ({ score, l
     ],
   };
 
-  return <ReactECharts option={option} style={{ height: 200 }} />;
+  return <SafeECharts option={option} style={{ height: 200 }} />;
 };
 
 // ==================== 生存率折线图 ====================
@@ -115,7 +136,7 @@ export const SurvivalChart: React.FC<{
     });
   }
 
-  return <ReactECharts option={option} style={{ height: 260 }} />;
+  return <SafeECharts option={option} style={{ height: 260 }} />;
 };
 
 // ==================== AI 结果卡片 ====================
