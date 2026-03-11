@@ -119,7 +119,7 @@ async def create_patient(
 @router.get("/", response_model=dict)
 async def list_patients(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=1000),
     keyword: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     cache: CacheManager = Depends(get_cache)
