@@ -156,7 +156,7 @@ const AppLayout: React.FC = () => (
 
 const App: React.FC = () => (
   <ConfigProvider locale={zhCN}>
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <AppLayout />
     </BrowserRouter>
   </ConfigProvider>
