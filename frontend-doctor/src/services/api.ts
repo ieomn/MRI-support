@@ -36,7 +36,6 @@ function attachInterceptors(instance: AxiosInstance) {
         if (status === 401) {
           message.error('未授权，请重新登录');
           localStorage.removeItem('token');
-          window.location.href = '/login';
         } else if (status === 502) {
           message.error('AI 推理服务暂不可用，请稍后重试');
         } else if (status === 500) {
@@ -83,16 +82,26 @@ export interface PatientCreateData {
   stage?: string;
 }
 
+export interface ReportSection {
+  title: string;
+  content: string;
+}
+
 export interface MedGemmaReport {
   series_id?: number;
   patient_id: number;
   report: string;
+  summary?: string;
+  sections?: ReportSection[];
+  format?: string;
   inference_time: number;
   model_id: string;
 }
 
 export interface MedGemmaAnswer {
   answer: string;
+  summary?: string;
+  sections?: ReportSection[];
   inference_time: number;
 }
 

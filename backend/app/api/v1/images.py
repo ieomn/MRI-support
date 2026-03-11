@@ -1,6 +1,9 @@
 """
 影像管理API
+支持 DICOM 和 NIfTI (.nii/.nii.gz) 格式
 """
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -10,6 +13,7 @@ from app.core.database import get_db
 from app.core.cache import get_cache, CacheManager
 from app.models.image import MRISeries
 from app.services.dicom_service import dicom_service
+from app.services.nifti_service import nifti_service
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -34,70 +38,157 @@ class ImageSeriesResponse(BaseModel):
 # ==================== API端点 ====================
 
 @router.post("/upload/{patient_id}", response_model=dict)
-async def upload_dicom_series(
+async def upload_image_series(
     patient_id: int,
     files: List[UploadFile] = File(...),
     db: AsyncSession = Depends(get_db),
     cache: CacheManager = Depends(get_cache)
 ):
     """
-    上传DICOM影像序列 (F-DM-03)
-    支持批量上传
+    上传影像序列 (F-DM-03)
+    支持 DICOM 和 NIfTI (.nii/.nii.gz) 格式
     """
     try:
         if not files:
             raise HTTPException(status_code=400, detail="未上传文件")
-        
-        # 读取所有文件内容
-        file_contents = []
-        for file in files:
-            content = await file.read()
-            file_contents.append(content)
-        
-        # 批量处理DICOM序列
-        result = await dicom_service.batch_process_dicom_series(
-            file_contents,
-            patient_id
-        )
-        
-        # 保存到数据库
-        series = MRISeries(
-            patient_id=patient_id,
-            series_uid=result["series_uid"],
-            study_uid=result["metadata"]["study_uid"],
-            modality=result["metadata"]["modality"],
-            series_description=result["metadata"]["series_description"],
-            series_number=result["metadata"]["series_number"],
-            storage_path=f"patients/{patient_id}/series/{result['series_uid']}",
-            file_count=result["success_count"],
-            total_size=sum(len(f) for f in file_contents),
-            thumbnail_path=result["thumbnail_path"],
-            image_metadata=result["metadata"],
-            slice_thickness=result["metadata"]["slice_thickness"],
-            pixel_spacing=result["metadata"]["pixel_spacing"],
-        )
-        
-        db.add(series)
-        await db.commit()
-        await db.refresh(series)
-        
-        # 缓存元数据
-        await cache.set_dicom_metadata(result["series_uid"], result["metadata"])
-        
-        return {
-            "success": True,
-            "message": f"上传成功 {result['success_count']} 个文件",
-            "data": {
-                "series_id": series.id,
-                "series_uid": series.series_uid,
-                "file_count": result["success_count"],
-                "failed_count": result["failed_count"],
-            }
-        }
-        
+
+        first_name = files[0].filename or ""
+        is_nifti = nifti_service.is_nifti(first_name)
+
+        if is_nifti:
+            return await _handle_nifti_upload(patient_id, files, db, cache)
+        else:
+            return await _handle_dicom_upload(patient_id, files, db, cache)
+
+    except HTTPException:
+        raise
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
+
+
+async def _handle_dicom_upload(
+    patient_id: int,
+    files: List[UploadFile],
+    db: AsyncSession,
+    cache: CacheManager,
+) -> dict:
+    """处理 DICOM 文件上传"""
+    file_contents = []
+    for file in files:
+        content = await file.read()
+        file_contents.append(content)
+
+    result = await dicom_service.batch_process_dicom_series(
+        file_contents, patient_id
+    )
+
+    series = MRISeries(
+        patient_id=patient_id,
+        series_uid=result["series_uid"],
+        study_uid=result["metadata"]["study_uid"],
+        modality=result["metadata"]["modality"],
+        series_description=result["metadata"]["series_description"],
+        series_number=result["metadata"]["series_number"],
+        storage_path=f"patients/{patient_id}/series/{result['series_uid']}",
+        file_count=result["success_count"],
+        total_size=sum(len(f) for f in file_contents),
+        thumbnail_path=result["thumbnail_path"],
+        image_metadata=result["metadata"],
+        slice_thickness=result["metadata"]["slice_thickness"],
+        pixel_spacing=result["metadata"]["pixel_spacing"],
+    )
+
+    db.add(series)
+    await db.commit()
+    await db.refresh(series)
+
+    await cache.set_dicom_metadata(result["series_uid"], result["metadata"])
+
+    return {
+        "success": True,
+        "message": f"DICOM 上传成功 {result['success_count']} 个文件",
+        "data": {
+            "series_id": series.id,
+            "series_uid": series.series_uid,
+            "file_count": result["success_count"],
+            "failed_count": result["failed_count"],
+            "format": "DICOM",
+        },
+    }
+
+
+async def _handle_nifti_upload(
+    patient_id: int,
+    files: List[UploadFile],
+    db: AsyncSession,
+    cache: CacheManager,
+) -> dict:
+    """处理 NIfTI (.nii/.nii.gz) 文件上传"""
+    import uuid
+
+    file = files[0]
+    filename = file.filename or "unknown.nii"
+    content = await file.read()
+
+    nifti_result = await asyncio.to_thread(
+        nifti_service.process_nifti_for_medgemma,
+        content, filename, 3,
+    )
+
+    nii_meta = nifti_result["metadata"]
+    series_uid = f"NII-{uuid.uuid4().hex[:12]}"
+    voxel = nii_meta.get("voxel_size", [])
+
+    series = MRISeries(
+        patient_id=patient_id,
+        series_uid=series_uid,
+        study_uid=series_uid,
+        modality="MR",
+        series_description=f"NIfTI: {filename}",
+        series_number=1,
+        storage_path=f"patients/{patient_id}/nifti/{series_uid}",
+        file_count=1,
+        total_size=len(content),
+        image_metadata={
+            "format": "NIfTI",
+            "filename": filename,
+            "shape": nii_meta.get("shape"),
+            "voxel_size": voxel,
+            "extracted_planes": nifti_result["planes"],
+            "slice_count": len(nifti_result["images_base64"]),
+        },
+        slice_thickness=voxel[2] if len(voxel) > 2 else None,
+        pixel_spacing=voxel[:2] if len(voxel) >= 2 else None,
+    )
+
+    db.add(series)
+    await db.commit()
+    await db.refresh(series)
+
+    nifti_cache = {
+        "series_id": series.id,
+        "images_base64": nifti_result["images_base64"],
+        "planes": nifti_result["planes"],
+    }
+    await cache.set_dicom_metadata(series_uid, {
+        **series.image_metadata,
+        "nifti_slices": nifti_cache,
+    })
+
+    return {
+        "success": True,
+        "message": f"NIfTI 上传成功，已提取 {len(nifti_result['planes'])} 个切面",
+        "data": {
+            "series_id": series.id,
+            "series_uid": series_uid,
+            "file_count": 1,
+            "format": "NIfTI",
+            "shape": nii_meta.get("shape"),
+            "planes": nifti_result["planes"],
+            "slice_count": len(nifti_result["images_base64"]),
+        },
+    }
 
 
 @router.get("/patient/{patient_id}", response_model=dict)

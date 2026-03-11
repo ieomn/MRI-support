@@ -4,7 +4,8 @@ MedGemma 远程推理客户端
 """
 import base64
 import io
-from typing import Optional
+import re
+from typing import Optional, List
 
 import httpx
 import numpy as np
@@ -160,18 +161,20 @@ class MedGemmaService:
         clinical_context: Optional[str] = None,
     ) -> dict:
         """
-        子宫内膜癌 MRI 专项分析
+        子宫内膜癌 MRI 专项分析（单图 DICOM）
         结合临床信息给出结构化分析报告
         """
         prompt_parts = [
             "请对这张子宫 MRI 影像进行详细分析，按以下结构输出：",
-            "1. 【影像描述】描述子宫形态、大小、信号特征",
-            "2. 【病灶发现】病灶位置、大小（估计值）、信号特点、边界情况",
-            "3. 【肌层浸润评估】评估肌层浸润深度（<50% 或 ≥50%）",
-            "4. 【淋巴结评估】盆腔及腹主动脉旁淋巴结情况",
-            "5. 【分期建议】基于影像特征的 FIGO 分期建议",
-            "6. 【鉴别诊断】需要鉴别的其他疾病",
-            "7. 【建议】进一步检查或随访建议",
+            "",
+            "【影像描述】描述子宫形态、大小、信号特征",
+            "【病灶发现】病灶位置、大小（估计值）、信号特点、边界情况",
+            "【肌层浸润评估】评估肌层浸润深度（<50% 或 ≥50%）",
+            "【淋巴结评估】盆腔及腹主动脉旁淋巴结情况",
+            "【分期建议】基于影像特征的 FIGO 分期建议",
+            "【鉴别诊断】需要鉴别的其他疾病",
+            "【建议】进一步检查或随访建议",
+            "【总结】用2-3句话概括关键发现和建议",
         ]
 
         if clinical_context:
@@ -186,7 +189,52 @@ class MedGemmaService:
             system_prompt=(
                 "你是一位经验丰富的妇科肿瘤放射诊断专家，"
                 "擅长子宫内膜癌的 MRI 影像诊断。"
-                "请基于影像特征给出专业、结构化的分析报告。用中文回答。"
+                "请基于影像特征给出专业、结构化的分析报告。"
+                "请严格按照【xxx】格式分段输出，每段标题用【】包裹。用中文回答。"
+            ),
+            max_new_tokens=3072,
+        )
+
+    async def analyze_nifti_volume(
+        self,
+        images_base64: List[str],
+        planes: List[str],
+        clinical_context: Optional[str] = None,
+    ) -> dict:
+        """
+        NIfTI 3D 体积多切面综合分析
+        将多平面切片一起发送给 MedGemma 进行综合判断
+        """
+        plane_labels = ", ".join(planes)
+
+        prompt_parts = [
+            f"以下是来自同一患者 NIfTI 格式 MRI 的 {len(images_base64)} 个切面（{plane_labels}）。",
+            "请综合所有切面进行分析，按以下结构输出：",
+            "",
+            "【影像描述】描述子宫形态、大小、各切面信号特征的综合表现",
+            "【病灶发现】综合多切面信息，描述病灶位置、大小（估计值）、信号特点、边界情况",
+            "【肌层浸润评估】结合多切面评估肌层浸润深度（<50% 或 ≥50%）",
+            "【淋巴结评估】盆腔及腹主动脉旁淋巴结情况",
+            "【分期建议】基于影像特征的 FIGO 分期建议",
+            "【鉴别诊断】需要鉴别的其他疾病",
+            "【建议】进一步检查或随访建议",
+            "【总结】用2-3句话概括关键发现和建议",
+        ]
+
+        if clinical_context:
+            prompt_parts.insert(0, f"临床信息：{clinical_context}")
+            prompt_parts.insert(1, "")
+
+        prompt = "\n".join(prompt_parts)
+
+        return await self.analyze_multi_image(
+            images_base64=images_base64,
+            prompt=prompt,
+            system_prompt=(
+                "你是一位经验丰富的妇科肿瘤放射诊断专家，"
+                "擅长子宫内膜癌的 MRI 影像诊断。"
+                "你正在查看一个 NIfTI 格式 3D MRI 体积的多个切面。"
+                "请综合所有切面信息给出专业、结构化的分析报告。用中文回答。"
             ),
             max_new_tokens=3072,
         )
@@ -229,6 +277,7 @@ class MedGemmaService:
             "3. 【生存预测】1年、3年、5年总生存率估计\n"
             "4. 【关键风险因素】影响预后的主要因素分析\n"
             "5. 【治疗建议】基于风险分层的治疗方案建议\n"
+            "6. 【总结】用2-3句话概括风险等级、关键风险因素和建议\n"
             "\n患者数据：\n" + "\n".join(data_lines)
         )
 
@@ -243,10 +292,60 @@ class MedGemmaService:
             max_new_tokens=2048,
         )
 
+    # ==================== 结构化输出解析 ====================
+
+    @staticmethod
+    def parse_structured_report(raw_text: str) -> dict:
+        """
+        将 MedGemma 的带 【】 标记的报告文本解析为结构化字典。
+        返回:
+            {
+                "sections": [{"title": "影像描述", "content": "..."}, ...],
+                "summary": "2-3句简短总结",
+                "raw": "原始完整文本"
+            }
+        """
+        sections = []
+        pattern = re.compile(r"【(.+?)】\s*[:：]?\s*")
+
+        parts = pattern.split(raw_text)
+
+        if len(parts) < 2:
+            return {
+                "sections": [{"title": "完整报告", "content": raw_text.strip()}],
+                "summary": _generate_fallback_summary(raw_text),
+                "raw": raw_text,
+            }
+
+        preamble = parts[0].strip()
+        if preamble:
+            sections.append({"title": "前言", "content": preamble})
+
+        summary_text = ""
+        for i in range(1, len(parts), 2):
+            title = parts[i].strip()
+            content = parts[i + 1].strip() if i + 1 < len(parts) else ""
+            content = re.sub(r"^\d+\.\s*", "", content).strip()
+
+            if title == "总结":
+                summary_text = content
+            else:
+                sections.append({"title": title, "content": content})
+
+        if not summary_text:
+            summary_text = _generate_fallback_summary(raw_text)
+
+        return {
+            "sections": sections,
+            "summary": summary_text,
+            "raw": raw_text,
+        }
+
     # ==================== 内部方法 ====================
 
     async def _post_with_retry(self, endpoint: str, payload: dict) -> dict:
-        """带重试的 POST 请求"""
+        """带重试和指数退避的 POST 请求"""
+        import asyncio
         last_error = None
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -265,7 +364,19 @@ class MedGemmaService:
                 last_error = str(e)
                 logger.error(f"MedGemma 请求异常: {e}")
 
+            if attempt < self.max_retries:
+                await asyncio.sleep(2 ** attempt)
+
         return {"success": False, "content": "", "error": last_error}
+
+
+def _generate_fallback_summary(text: str) -> str:
+    """当 LLM 输出没有 【总结】 段时，截取前几句作为摘要"""
+    sentences = re.split(r"[。！\n]", text)
+    meaningful = [s.strip() for s in sentences if len(s.strip()) > 10]
+    if not meaningful:
+        return text[:200].strip()
+    return "。".join(meaningful[:3]) + "。"
 
 
 # 全局服务实例

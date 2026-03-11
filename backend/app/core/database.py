@@ -29,14 +29,10 @@ Base = declarative_base()
 
 
 async def get_db() -> AsyncSession:
-    """依赖注入：获取数据库会话"""
+    """依赖注入：获取数据库会话（不自动 commit，由端点自行管理事务）"""
     async with AsyncSessionLocal() as session:
         try:
             yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
         finally:
             await session.close()
 

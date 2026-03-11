@@ -14,7 +14,7 @@ const ImageManage: React.FC = () => {
   const [selectedPatient, setSelectedPatient] = useState<number | null>(null);
   const [images, setImages] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [actionLoading, setActionLoading] = useState<number | null>(null);
+  const [actionLoading, setActionLoading] = useState<{ id: number; type: string } | null>(null);
 
   const loadPatients = useCallback(async () => {
     try {
@@ -37,20 +37,22 @@ const ImageManage: React.FC = () => {
   useEffect(() => { loadImages(); }, [loadImages]);
 
   const handleSegmentation = async (seriesId: number) => {
-    setActionLoading(seriesId);
+    setActionLoading({ id: seriesId, type: 'unet' });
     try {
       const res: any = await aiAPI.runSegmentation({ series_id: seriesId });
       if (res.success) message.success('U-Net 分割完成');
+      else message.error(res.message || '分割失败');
     } catch { /* interceptor */ }
     finally { setActionLoading(null); }
   };
 
   const handleMedGemma = async (seriesId: number) => {
     if (!selectedPatient) return;
-    setActionLoading(seriesId);
+    setActionLoading({ id: seriesId, type: 'medgemma' });
     try {
       const res: any = await medgemmaAPI.analyzeImage({ series_id: seriesId, patient_id: selectedPatient });
       if (res.success) message.success('MedGemma 分析完成');
+      else message.error(res.message || '分析失败');
     } catch { /* interceptor */ }
     finally { setActionLoading(null); }
   };
@@ -58,7 +60,7 @@ const ImageManage: React.FC = () => {
   const uploadProps: UploadProps = {
     name: 'files',
     multiple: true,
-    accept: '.dcm,.dicom',
+    accept: '.dcm,.dicom,.nii,.nii.gz',
     disabled: !selectedPatient,
     customRequest: async ({ file, onSuccess, onError }) => {
       if (!selectedPatient) return;
@@ -66,7 +68,12 @@ const ImageManage: React.FC = () => {
         const dt = new DataTransfer();
         dt.items.add(file as File);
         const res: any = await imageAPI.upload(selectedPatient, dt.files);
-        if (res.success) { message.success('上传成功'); onSuccess?.(res); loadImages(); }
+        if (res.success) {
+          const fmt = res.data?.format;
+          message.success(fmt === 'NIfTI' ? `NIfTI 上传成功，提取 ${res.data.slice_count} 个切面` : '上传成功');
+          onSuccess?.(res);
+          loadImages();
+        }
       } catch (e) { message.error('上传失败'); onError?.(e as Error); }
     },
   };
@@ -74,7 +81,21 @@ const ImageManage: React.FC = () => {
   const columns = [
     { title: '序列 UID', dataIndex: 'series_uid', key: 'series_uid', ellipsis: true },
     { title: '成像方式', dataIndex: 'modality', key: 'modality', width: 100 },
-    { title: '序列描述', dataIndex: 'series_description', key: 'series_description', ellipsis: true },
+    {
+      title: '序列描述',
+      dataIndex: 'series_description',
+      key: 'series_description',
+      ellipsis: true,
+      render: (desc: string) => {
+        const isNifti = desc?.startsWith('NIfTI:');
+        return (
+          <Space>
+            {isNifti && <Tag color="geekblue">NIfTI</Tag>}
+            <span>{desc}</span>
+          </Space>
+        );
+      },
+    },
     { title: '文件数', dataIndex: 'file_count', key: 'file_count', width: 80 },
     {
       title: '层厚',
@@ -96,7 +117,7 @@ const ImageManage: React.FC = () => {
           <Button
             size="small"
             icon={<ThunderboltOutlined />}
-            loading={actionLoading === record.id}
+            loading={actionLoading?.id === record.id && actionLoading?.type === 'unet'}
             onClick={() => handleSegmentation(record.id)}
           >
             U-Net
@@ -105,7 +126,7 @@ const ImageManage: React.FC = () => {
             type="primary"
             size="small"
             icon={<RobotOutlined />}
-            loading={actionLoading === record.id}
+            loading={actionLoading?.id === record.id && actionLoading?.type === 'medgemma'}
             onClick={() => handleMedGemma(record.id)}
           >
             MedGemma
@@ -132,7 +153,7 @@ const ImageManage: React.FC = () => {
               options={patients.map((p) => ({ value: p.id, label: `${p.patient_no} - ${p.name}` }))}
             />
             <Upload {...uploadProps}>
-              <Button icon={<UploadOutlined />} disabled={!selectedPatient}>上传 DICOM</Button>
+              <Button icon={<UploadOutlined />} disabled={!selectedPatient}>上传影像 (DICOM/NIfTI)</Button>
             </Upload>
             <Button icon={<ReloadOutlined />} onClick={loadImages}>刷新</Button>
           </Space>

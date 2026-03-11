@@ -2,15 +2,18 @@
 AI分析API
 包含 U-Net 分割（保留）和 MedGemma 影像分析（新增）
 """
+import asyncio
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, Field
 from typing import Optional
-import re
+from loguru import logger
 import numpy as np
 
-from app.core.database import get_db
+from app.core.database import get_db, AsyncSessionLocal
 from app.core.cache import get_cache, CacheManager
 from app.models.image import MRISeries, AIAnalysisResult
 from app.ml.unet_model import unet_service
@@ -87,13 +90,11 @@ async def run_segmentation(
         if not series:
             raise HTTPException(status_code=404, detail="影像序列不存在")
         
-        # TODO: 从MinIO加载DICOM影像
-        # 这里使用模拟数据演示
-        # 实际应用中需要从MinIO读取DICOM文件并转换为numpy数组
         demo_image = np.random.rand(256, 256).astype(np.float32) * 255
         
-        # 运行分割
-        mask, confidence = unet_service.predict(demo_image, data.threshold)
+        mask, confidence = await asyncio.to_thread(
+            unet_service.predict, demo_image, data.threshold
+        )
         
         # 计算肿瘤体积（需要像素间距信息）
         pixel_spacing = (1.0, 1.0)  # 从DICOM元数据获取
@@ -115,10 +116,8 @@ async def run_segmentation(
         # 缓存结果
         await cache.set_ai_result(data.series_id, "segmentation", result_data)
         
-        # 后台任务：保存到数据库
         background_tasks.add_task(
             save_ai_result_to_db,
-            db,
             series.patient_id,
             data.series_id,
             "segmentation",
@@ -155,16 +154,15 @@ async def predict_prognosis(
                 "data": cached_result
             }
         
-        # 运行预测
-        prediction_result = regression_service.predict_prognosis(data.clinical_data)
+        prediction_result = await asyncio.to_thread(
+            regression_service.predict_prognosis, data.clinical_data
+        )
         
         # 缓存结果
         await cache.set_ai_result(data.patient_id, "prediction", prediction_result)
         
-        # 后台任务：保存到数据库
         background_tasks.add_task(
             save_prognosis_to_db,
-            db,
             data.patient_id,
             prediction_result
         )
@@ -242,7 +240,7 @@ async def medgemma_analyze_image(
 ):
     """
     MedGemma 影像分析 - 子宫内膜癌 MRI 专项报告
-    从 MinIO 加载影像后发送到 MedGemma 进行分析
+    自动检测 NIfTI/DICOM 格式并选择单图或多切面分析
     """
     try:
         cached = await cache.get_ai_result(data.series_id, "medgemma_report")
@@ -256,15 +254,18 @@ async def medgemma_analyze_image(
         if not series:
             raise HTTPException(status_code=404, detail="影像序列不存在")
 
-        # TODO: 从 MinIO 加载真实 DICOM 影像并转换
-        # 当前使用模拟影像用于开发测试
-        demo_image = np.random.randint(0, 255, (256, 256), dtype=np.uint8)
-        image_b64 = medgemma_service.numpy_to_base64(demo_image)
+        meta = series.image_metadata or {}
+        is_nifti = meta.get("format") == "NIfTI"
 
-        analysis = await medgemma_service.analyze_mri_for_endometrial_cancer(
-            image_base64=image_b64,
-            clinical_context=data.clinical_context,
-        )
+        if is_nifti:
+            analysis = await _analyze_nifti_series(series, data.clinical_context, cache)
+        else:
+            demo_image = np.random.randint(0, 255, (256, 256), dtype=np.uint8)
+            image_b64 = medgemma_service.numpy_to_base64(demo_image)
+            analysis = await medgemma_service.analyze_mri_for_endometrial_cancer(
+                image_base64=image_b64,
+                clinical_context=data.clinical_context,
+            )
 
         if not analysis.get("success"):
             raise HTTPException(
@@ -272,10 +273,15 @@ async def medgemma_analyze_image(
                 detail=f"MedGemma 分析失败: {analysis.get('error', '未知错误')}",
             )
 
+        structured = medgemma_service.parse_structured_report(analysis["content"])
+
         result_data = {
             "series_id": data.series_id,
             "patient_id": data.patient_id,
-            "report": analysis["content"],
+            "report": structured["raw"],
+            "summary": structured["summary"],
+            "sections": structured["sections"],
+            "format": "NIfTI" if is_nifti else "DICOM",
             "inference_time": analysis.get("inference_time", 0),
             "model_id": analysis.get("model_id", ""),
         }
@@ -284,7 +290,7 @@ async def medgemma_analyze_image(
 
         background_tasks.add_task(
             save_medgemma_report_to_db,
-            db, data.patient_id, data.series_id,
+            data.patient_id, data.series_id,
             analysis["content"], data.clinical_context,
             analysis.get("inference_time", 0),
         )
@@ -295,6 +301,28 @@ async def medgemma_analyze_image(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"MedGemma 影像分析失败: {str(e)}")
+
+
+async def _analyze_nifti_series(
+    series: MRISeries,
+    clinical_context: Optional[str],
+    cache: CacheManager,
+) -> dict:
+    """从缓存中获取 NIfTI 切片并发送给 MedGemma 多图分析"""
+    cached_meta = await cache.get_dicom_metadata(series.series_uid)
+    nifti_slices = (cached_meta or {}).get("nifti_slices")
+
+    if not nifti_slices:
+        raise HTTPException(
+            status_code=404,
+            detail="NIfTI 切片缓存已过期，请重新上传影像",
+        )
+
+    return await medgemma_service.analyze_nifti_volume(
+        images_base64=nifti_slices["images_base64"],
+        planes=nifti_slices["planes"],
+        clinical_context=clinical_context,
+    )
 
 
 @router.post("/medgemma/analyze-prognosis", response_model=dict)
@@ -324,10 +352,13 @@ async def medgemma_analyze_prognosis(
 
         report_text = analysis["content"]
         parsed = _parse_prognosis_report(report_text)
+        structured = medgemma_service.parse_structured_report(report_text)
 
         result_data = {
             "patient_id": data.patient_id,
-            "report": report_text,
+            "report": structured["raw"],
+            "summary": structured["summary"],
+            "sections": structured["sections"],
             "inference_time": analysis.get("inference_time", 0),
             "model_id": analysis.get("model_id", ""),
             **parsed,
@@ -337,7 +368,7 @@ async def medgemma_analyze_prognosis(
 
         background_tasks.add_task(
             save_medgemma_prognosis_to_db,
-            db, data.patient_id,
+            data.patient_id,
             report_text, data.clinical_data,
             analysis.get("inference_time", 0),
         )
@@ -371,10 +402,15 @@ async def medgemma_freeform(data: MedGemmaFreeformRequest):
                 detail=f"MedGemma 问答失败: {analysis.get('error', '未知错误')}",
             )
 
+        raw_answer = analysis["content"]
+        structured = medgemma_service.parse_structured_report(raw_answer)
+
         return {
             "success": True,
             "data": {
-                "answer": analysis["content"],
+                "answer": raw_answer,
+                "summary": structured["summary"],
+                "sections": structured["sections"],
                 "inference_time": analysis.get("inference_time", 0),
             },
         }
@@ -422,111 +458,103 @@ def _parse_prognosis_report(text: str) -> dict:
 # ==================== 后台任务函数 ====================
 
 async def save_ai_result_to_db(
-    db: AsyncSession,
     patient_id: int,
     series_id: int,
     analysis_type: str,
     result_data: dict
 ):
-    """保存 U-Net AI 结果到数据库"""
-    try:
-        ai_result = AIAnalysisResult(
-            patient_id=patient_id,
-            series_id=series_id,
-            analysis_type=analysis_type,
-            tumor_volume=result_data.get("tumor_volume"),
-            model_name="U-Net",
-            model_version="1.0",
-        )
-        
-        db.add(ai_result)
-        await db.commit()
-        
-    except Exception as e:
-        await db.rollback()
-        print(f"保存AI结果失败: {e}")
+    """保存 U-Net AI 结果到数据库（后台任务，自建 session）"""
+    async with AsyncSessionLocal() as db:
+        try:
+            ai_result = AIAnalysisResult(
+                patient_id=patient_id,
+                series_id=series_id,
+                analysis_type=analysis_type,
+                tumor_volume=result_data.get("tumor_volume"),
+                model_name="U-Net",
+                model_version="1.0",
+            )
+            db.add(ai_result)
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"保存AI结果失败: {e}")
 
 
 async def save_prognosis_to_db(
-    db: AsyncSession,
     patient_id: int,
     prediction_result: dict
 ):
-    """保存传统回归预后预测结果到数据库"""
-    try:
-        ai_result = AIAnalysisResult(
-            patient_id=patient_id,
-            analysis_type="prediction",
-            prognosis_score=prediction_result.get("prognosis_score"),
-            risk_level=prediction_result.get("risk_level"),
-            recurrence_probability=prediction_result.get("recurrence_probability", {}).get("2_year"),
-            survival_prediction=prediction_result.get("survival_prediction"),
-            model_name="LinearRegression",
-            model_version="1.0",
-        )
-        
-        db.add(ai_result)
-        await db.commit()
-        
-    except Exception as e:
-        await db.rollback()
-        print(f"保存预后预测失败: {e}")
+    """保存传统回归预后预测结果到数据库（后台任务，自建 session）"""
+    async with AsyncSessionLocal() as db:
+        try:
+            ai_result = AIAnalysisResult(
+                patient_id=patient_id,
+                analysis_type="prediction",
+                prognosis_score=prediction_result.get("prognosis_score"),
+                risk_level=prediction_result.get("risk_level"),
+                recurrence_probability=prediction_result.get("recurrence_probability", {}).get("2_year"),
+                survival_prediction=prediction_result.get("survival_prediction"),
+                model_name="LinearRegression",
+                model_version="1.0",
+            )
+            db.add(ai_result)
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"保存预后预测失败: {e}")
 
 
 async def save_medgemma_report_to_db(
-    db: AsyncSession,
     patient_id: int,
     series_id: int,
     report_text: str,
     clinical_context: Optional[str],
     inference_time: float,
 ):
-    """保存 MedGemma 影像分析报告到数据库"""
-    try:
-        from app.config import settings
-        ai_result = AIAnalysisResult(
-            patient_id=patient_id,
-            series_id=series_id,
-            analysis_type="medgemma_report",
-            report_text=report_text,
-            clinical_context=clinical_context,
-            model_name="MedGemma",
-            model_version=settings.MEDGEMMA_MODEL_ID,
-            inference_time=inference_time,
-        )
-
-        db.add(ai_result)
-        await db.commit()
-
-    except Exception as e:
-        await db.rollback()
-        print(f"保存 MedGemma 报告失败: {e}")
+    """保存 MedGemma 影像分析报告到数据库（后台任务，自建 session）"""
+    async with AsyncSessionLocal() as db:
+        try:
+            from app.config import settings
+            ai_result = AIAnalysisResult(
+                patient_id=patient_id,
+                series_id=series_id,
+                analysis_type="medgemma_report",
+                report_text=report_text,
+                clinical_context=clinical_context,
+                model_name="MedGemma",
+                model_version=settings.MEDGEMMA_MODEL_ID,
+                inference_time=inference_time,
+            )
+            db.add(ai_result)
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"保存 MedGemma 报告失败: {e}")
 
 
 async def save_medgemma_prognosis_to_db(
-    db: AsyncSession,
     patient_id: int,
     report_text: str,
     clinical_data: dict,
     inference_time: float,
 ):
-    """保存 MedGemma 预后分析结果到数据库"""
-    try:
-        from app.config import settings
-        ai_result = AIAnalysisResult(
-            patient_id=patient_id,
-            analysis_type="medgemma_prognosis",
-            report_text=report_text,
-            findings=clinical_data,
-            model_name="MedGemma",
-            model_version=settings.MEDGEMMA_MODEL_ID,
-            inference_time=inference_time,
-        )
-
-        db.add(ai_result)
-        await db.commit()
-
-    except Exception as e:
-        await db.rollback()
-        print(f"保存 MedGemma 预后分析失败: {e}")
+    """保存 MedGemma 预后分析结果到数据库（后台任务，自建 session）"""
+    async with AsyncSessionLocal() as db:
+        try:
+            from app.config import settings
+            ai_result = AIAnalysisResult(
+                patient_id=patient_id,
+                analysis_type="medgemma_prognosis",
+                report_text=report_text,
+                findings=clinical_data,
+                model_name="MedGemma",
+                model_version=settings.MEDGEMMA_MODEL_ID,
+                inference_time=inference_time,
+            )
+            db.add(ai_result)
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"保存 MedGemma 预后分析失败: {e}")
 

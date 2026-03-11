@@ -3,7 +3,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
-import { ConfigProvider, Layout, Menu, Badge, Tooltip, Space, Tag } from 'antd';
+import { ConfigProvider, Layout, Menu, Badge, Tooltip, Space, Tag, Result } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import {
   UserOutlined,
@@ -12,7 +12,6 @@ import {
   DashboardOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import { Result } from 'antd';
 import PatientList from './pages/PatientList';
 import PatientDetail from './pages/PatientDetail';
 import ImageManage from './pages/ImageManage';
@@ -157,7 +156,7 @@ const AppLayout: React.FC = () => (
 
 const App: React.FC = () => (
   <ConfigProvider locale={zhCN}>
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <AppLayout />
     </BrowserRouter>
   </ConfigProvider>

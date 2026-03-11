@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import Optional, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 
 from app.core.database import get_db
@@ -67,7 +67,7 @@ async def create_followup_plan(
         )
         
         db.add(plan)
-        await db.commit()
+        await db.flush()
         await db.refresh(plan)
         
         # 根据配置自动创建任务
@@ -148,7 +148,11 @@ async def get_patient_tasks(
         query = select(FollowUpTask).where(FollowUpTask.patient_id == patient_id)
         
         if status:
-            query = query.where(FollowUpTask.status == status)
+            try:
+                status_enum = FollowUpStatusEnum(status)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"无效的任务状态: {status}")
+            query = query.where(FollowUpTask.status == status_enum)
         
         result = await db.execute(query)
         tasks = result.scalars().all()
@@ -201,7 +205,7 @@ async def create_followup_record(
         task = result.scalar_one_or_none()
         if task:
             task.status = FollowUpStatusEnum.COMPLETED
-            task.completed_date = datetime.now()
+            task.completed_date = datetime.now(timezone.utc)
         
         await db.commit()
         

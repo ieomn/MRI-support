@@ -2,7 +2,7 @@
  * AI 分析结果可视化组件
  * 包含风险仪表盘、生存率折线图、报告展示
  */
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import { Card, Tag, Space, Typography, Divider, Progress, Row, Col, Statistic } from 'antd';
 import {
   CheckCircleOutlined,
@@ -15,6 +15,27 @@ import {
 import ReactECharts from 'echarts-for-react';
 
 const { Text, Paragraph } = Typography;
+
+/**
+ * echarts-for-react 3.x 在 React StrictMode 下存在
+ * ResizeObserver.disconnect 被双重调用导致 crash 的问题。
+ * 此包装组件通过手动控制 dispose 规避该问题。
+ */
+const SafeECharts: React.FC<React.ComponentProps<typeof ReactECharts>> = (props) => {
+  const ref = useRef<any>(null);
+
+  useEffect(() => {
+    return () => {
+      try {
+        ref.current?.getEchartsInstance()?.dispose();
+      } catch {
+        // ignore dispose errors in StrictMode double-unmount
+      }
+    };
+  }, []);
+
+  return <ReactECharts ref={ref} {...props} />;
+};
 
 // ==================== 风险仪表盘 ====================
 
@@ -60,7 +81,7 @@ export const RiskGauge: React.FC<{ score: number; level: string }> = ({ score, l
     ],
   };
 
-  return <ReactECharts option={option} style={{ height: 200 }} />;
+  return <SafeECharts option={option} style={{ height: 200 }} />;
 };
 
 // ==================== 生存率折线图 ====================
@@ -80,14 +101,20 @@ export const SurvivalChart: React.FC<{
     series: [] as any[],
   };
 
+  const timePoints = ['0年', '1年', '2年', '3年', '5年'];
+  option.xAxis.data = timePoints;
+
   if (survival) {
     option.legend.data.push('总生存率');
-    option.xAxis.data = ['0年', '1年', '3年', '5年'];
+    const s1 = +(survival['1_year'] * 100).toFixed(1);
+    const s3 = +(survival['3_year'] * 100).toFixed(1);
+    const s5 = +(survival['5_year'] * 100).toFixed(1);
     option.series.push({
       name: '总生存率',
       type: 'line',
       smooth: true,
-      data: [100, +(survival['1_year'] * 100).toFixed(1), +(survival['3_year'] * 100).toFixed(1), +(survival['5_year'] * 100).toFixed(1)],
+      data: [100, s1, null, s3, s5],
+      connectNulls: true,
       areaStyle: { opacity: 0.15 },
       lineStyle: { color: '#1890ff' },
       itemStyle: { color: '#1890ff' },
@@ -96,20 +123,20 @@ export const SurvivalChart: React.FC<{
 
   if (recurrence) {
     option.legend.data.push('复发概率');
-    if (!option.xAxis.data.length) option.xAxis.data = ['0年', '2年', '5年'];
+    const r2 = Math.min(+(recurrence['2_year'] * 100).toFixed(1), 100);
+    const r5 = Math.min(+(recurrence['5_year'] * 100).toFixed(1), 100);
     option.series.push({
       name: '复发概率',
       type: 'line',
       smooth: true,
-      data: survival
-        ? [0, null, +(recurrence['2_year'] * 100).toFixed(1), +(recurrence['5_year'] * 100).toFixed(1)]
-        : [0, +(recurrence['2_year'] * 100).toFixed(1), +(recurrence['5_year'] * 100).toFixed(1)],
+      data: [0, null, r2, null, r5],
+      connectNulls: true,
       lineStyle: { color: '#ff4d4f', type: 'dashed' },
       itemStyle: { color: '#ff4d4f' },
     });
   }
 
-  return <ReactECharts option={option} style={{ height: 260 }} />;
+  return <SafeECharts option={option} style={{ height: 260 }} />;
 };
 
 // ==================== AI 结果卡片 ====================
@@ -156,7 +183,13 @@ export const AIResultCard: React.FC<{ result: any }> = ({ result }) => {
             {result.prognosis_score != null && <RiskGauge score={result.prognosis_score} level={result.risk_level || 'medium'} />}
           </Col>
           <Col span={16}>
-            <SurvivalChart survival={result.survival_prediction} recurrence={result.recurrence_probability ? { '2_year': result.recurrence_probability, '5_year': result.recurrence_probability * 1.5 } : undefined} />
+            <SurvivalChart
+              survival={result.survival_prediction}
+              recurrence={result.recurrence_probability != null ? {
+                '2_year': result.recurrence_probability,
+                '5_year': Math.min((result.recurrence_probability ?? 0) * 1.4, 1.0),
+              } : undefined}
+            />
           </Col>
         </Row>
       )}

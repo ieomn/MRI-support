@@ -1,7 +1,7 @@
 """
 患者数据模型
 """
-from sqlalchemy import Column, Integer, String, Date, DateTime, Text, Enum, JSON
+from sqlalchemy import Column, Integer, String, Date, DateTime, Text, Enum, JSON, text
 from sqlalchemy.sql import func
 from app.core.database import Base
 import enum
@@ -49,7 +49,17 @@ class Patient(Base):
     # 系统字段
     created_at = Column(DateTime, server_default=func.now(), comment="创建时间")
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间")
-    is_deleted = Column(Integer, default=0, comment="是否删除")
+    is_deleted = Column(Integer, server_default=text("0"), comment="是否删除")
+    
+    @property
+    def age(self):
+        if not self.birth_date:
+            return None
+        from datetime import date as _date
+        today = _date.today()
+        return today.year - self.birth_date.year - (
+            (today.month, today.day) < (self.birth_date.month, self.birth_date.day)
+        )
     
     def to_dict(self):
         """转换为字典"""
@@ -58,13 +68,20 @@ class Patient(Base):
             "patient_no": self.patient_no,
             "name": self.name,
             "gender": self.gender.value if self.gender else None,
+            "age": self.age,
             "birth_date": self.birth_date.isoformat() if self.birth_date else None,
             "phone": self.phone,
             "address": self.address,
             "admission_date": self.admission_date.isoformat() if self.admission_date else None,
             "hospital": self.hospital,
+            "department": self.department,
+            "attending_doctor": self.attending_doctor,
             "diagnosis": self.diagnosis,
             "stage": self.stage,
+            "grade": self.grade,
+            "treatment_plan": self.treatment_plan,
+            "surgery_date": self.surgery_date.isoformat() if self.surgery_date else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 

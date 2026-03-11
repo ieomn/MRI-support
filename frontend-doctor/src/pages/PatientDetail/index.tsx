@@ -41,20 +41,29 @@ import type { UploadProps, TabsProps } from 'antd';
 const { TextArea } = Input;
 const { Title, Paragraph, Text } = Typography;
 
-// ==================== 报告展示组件 ====================
+// ==================== 结构化报告展示组件 ====================
 
-const ReportViewer: React.FC<{
+interface ReportSection {
   title: string;
   content: string;
+}
+
+const StructuredReportViewer: React.FC<{
+  title: string;
+  content: string;
+  summary?: string;
+  sections?: ReportSection[];
   inferenceTime?: number;
   modelId?: string;
-}> = ({ title, content, inferenceTime, modelId }) => (
+  format?: string;
+}> = ({ title, content, summary, sections, inferenceTime, modelId, format }) => (
   <Card
     size="small"
     title={
       <Space>
         <FileTextOutlined />
         <span>{title}</span>
+        {format && <Tag color={format === 'NIfTI' ? 'geekblue' : 'default'}>{format}</Tag>}
       </Space>
     }
     extra={
@@ -73,9 +82,37 @@ const ReportViewer: React.FC<{
     }
     style={{ marginBottom: 16 }}
   >
-    <Typography>
-      <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{content}</div>
-    </Typography>
+    {summary && (
+      <Alert
+        type="success"
+        showIcon
+        message="AI 总结"
+        description={summary}
+        style={{ marginBottom: 16 }}
+      />
+    )}
+
+    {sections && sections.length > 0 ? (
+      <div>
+        {sections.map((sec, idx) => (
+          <div key={idx} style={{ marginBottom: 12 }}>
+            <Text strong style={{ fontSize: 14, color: '#1890ff' }}>
+              {sec.title}
+            </Text>
+            <Paragraph
+              style={{ marginTop: 4, marginBottom: 0, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}
+            >
+              {sec.content}
+            </Paragraph>
+            {idx < sections.length - 1 && <Divider style={{ margin: '8px 0' }} />}
+          </div>
+        ))}
+      </div>
+    ) : (
+      <Typography>
+        <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{content}</div>
+      </Typography>
+    )}
   </Card>
 );
 
@@ -84,17 +121,17 @@ const ReportViewer: React.FC<{
 const PatientDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const patientId = parseInt(id || '0');
+  const patientId = Number(id);
 
   const [patient, setPatient] = useState<any>(null);
   const [images, setImages] = useState<any[]>([]);
   const [aiResults, setAiResults] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [segLoadingId, setSegLoadingId] = useState<number | null>(null);
 
   const [followupTasks, setFollowupTasks] = useState<any[]>([]);
 
   // MedGemma 状态
-  const [mgImageLoading, setMgImageLoading] = useState(false);
+  const [mgImageLoadingId, setMgImageLoadingId] = useState<number | null>(null);
   const [mgProgLoading, setMgProgLoading] = useState(false);
   const [mgAskLoading, setMgAskLoading] = useState(false);
   const [mgImageReport, setMgImageReport] = useState<any>(null);
@@ -103,6 +140,17 @@ const PatientDetail: React.FC = () => {
 
   const [progForm] = Form.useForm();
   const [question, setQuestion] = useState('');
+
+  useEffect(() => {
+    setMgImageReport(null);
+    setMgProgReport(null);
+    setMgAnswer(null);
+    setQuestion('');
+    setPatient(null);
+    setImages([]);
+    setAiResults([]);
+    setFollowupTasks([]);
+  }, [patientId]);
 
   // ========== 数据加载 ==========
 
@@ -146,21 +194,23 @@ const PatientDetail: React.FC = () => {
   // ========== U-Net 分割 ==========
 
   const handleRunSegmentation = async (seriesId: number) => {
-    setLoading(true);
+    setSegLoadingId(seriesId);
     try {
       const res: any = await aiAPI.runSegmentation({ series_id: seriesId, threshold: 0.5 });
       if (res.success) {
         message.success('U-Net 分割完成');
         loadAIResults();
+      } else {
+        message.error(res.message || '分割失败');
       }
     } catch { /* interceptor */ }
-    finally { setLoading(false); }
+    finally { setSegLoadingId(null); }
   };
 
   // ========== MedGemma 影像分析 ==========
 
   const handleMedGemmaImage = async (seriesId: number) => {
-    setMgImageLoading(true);
+    setMgImageLoadingId(seriesId);
     setMgImageReport(null);
     try {
       const clinicalContext = patient
@@ -178,7 +228,7 @@ const PatientDetail: React.FC = () => {
         loadAIResults();
       }
     } catch { /* interceptor */ }
-    finally { setMgImageLoading(false); }
+    finally { setMgImageLoadingId(null); }
   };
 
   // ========== MedGemma 预后分析 ==========
@@ -225,13 +275,18 @@ const PatientDetail: React.FC = () => {
   const uploadProps: UploadProps = {
     name: 'files',
     multiple: true,
-    accept: '.dcm,.dicom',
+    accept: '.dcm,.dicom,.nii,.nii.gz',
     customRequest: async ({ file, onSuccess, onError }) => {
       try {
         const dt = new DataTransfer();
         dt.items.add(file as File);
         const res: any = await imageAPI.upload(patientId, dt.files);
-        if (res.success) { message.success('上传成功'); onSuccess?.(res); loadImages(); }
+        if (res.success) {
+          const fmt = res.data?.format;
+          message.success(fmt === 'NIfTI' ? `NIfTI 上传成功，提取 ${res.data.slice_count} 个切面` : '上传成功');
+          onSuccess?.(res);
+          loadImages();
+        }
       } catch (err) { message.error('上传失败'); onError?.(err as Error); }
     },
   };
@@ -291,7 +346,7 @@ const PatientDetail: React.FC = () => {
       dataIndex: 'report_text',
       key: 'report_text',
       ellipsis: true,
-      render: (text: string) => text ? <Text type="secondary">{text.slice(0, 80)}...</Text> : '-',
+      render: (text: string) => text ? <Text type="secondary">{text.length > 80 ? `${text.slice(0, 80)}…` : text}</Text> : '-',
     },
     {
       title: '时间',
@@ -303,10 +358,16 @@ const PatientDetail: React.FC = () => {
 
   // ========== Tab 定义 ==========
 
+  if (!id || Number.isNaN(patientId)) {
+    return <Alert type="error" message="无效的患者 ID" showIcon style={{ margin: 24 }} />;
+  }
+
   if (!patient) {
     return (
       <div style={{ padding: 24, textAlign: 'center' }}>
-        <Spin size="large" tip="加载中..." />
+        <Spin size="large" tip="加载中...">
+          <div style={{ padding: 50 }} />
+        </Spin>
       </div>
     );
   }
@@ -337,7 +398,7 @@ const PatientDetail: React.FC = () => {
         <>
           <div style={{ marginBottom: 16 }}>
             <Upload {...uploadProps}>
-              <Button icon={<UploadOutlined />}>上传 DICOM 文件</Button>
+              <Button icon={<UploadOutlined />}>上传影像文件 (DICOM / NIfTI)</Button>
             </Upload>
           </div>
           <Table
@@ -346,7 +407,21 @@ const PatientDetail: React.FC = () => {
             columns={[
               { title: '序列 UID', dataIndex: 'series_uid', key: 'series_uid', ellipsis: true },
               { title: '成像方式', dataIndex: 'modality', key: 'modality', width: 100 },
-              { title: '序列描述', dataIndex: 'series_description', key: 'series_description', ellipsis: true },
+              {
+                title: '序列描述',
+                dataIndex: 'series_description',
+                key: 'series_description',
+                ellipsis: true,
+                render: (desc: string) => {
+                  const isNifti = desc?.startsWith('NIfTI:');
+                  return (
+                    <Space>
+                      {isNifti && <Tag color="geekblue">NIfTI</Tag>}
+                      <span>{desc}</span>
+                    </Space>
+                  );
+                },
+              },
               { title: '文件数', dataIndex: 'file_count', key: 'file_count', width: 80 },
               { title: '上传时间', dataIndex: 'upload_time', key: 'upload_time', width: 180 },
               {
@@ -359,7 +434,7 @@ const PatientDetail: React.FC = () => {
                       size="small"
                       icon={<ThunderboltOutlined />}
                       onClick={() => handleRunSegmentation(record.id)}
-                      loading={loading}
+                      loading={segLoadingId === record.id}
                     >
                       U-Net 分割
                     </Button>
@@ -368,7 +443,7 @@ const PatientDetail: React.FC = () => {
                       size="small"
                       icon={<RobotOutlined />}
                       onClick={() => handleMedGemmaImage(record.id)}
-                      loading={mgImageLoading}
+                      loading={mgImageLoadingId === record.id}
                     >
                       MedGemma 分析
                     </Button>
@@ -378,9 +453,12 @@ const PatientDetail: React.FC = () => {
             ]}
           />
           {mgImageReport && (
-            <ReportViewer
+            <StructuredReportViewer
               title="MedGemma 影像分析报告"
               content={mgImageReport.report}
+              summary={mgImageReport.summary}
+              sections={mgImageReport.sections}
+              format={mgImageReport.format}
               inferenceTime={mgImageReport.inference_time}
               modelId={mgImageReport.model_id}
             />
@@ -516,9 +594,11 @@ const PatientDetail: React.FC = () => {
                     </div>
                   </Card>
                 )}
-                <ReportViewer
+                <StructuredReportViewer
                   title="MedGemma 预后分析报告"
                   content={mgProgReport.report}
+                  summary={mgProgReport.summary}
+                  sections={mgProgReport.sections}
                   inferenceTime={mgProgReport.inference_time}
                   modelId={mgProgReport.model_id}
                 />
@@ -561,9 +641,11 @@ const PatientDetail: React.FC = () => {
             </div>
             {mgAnswer && (
               <div style={{ marginTop: 16 }}>
-                <ReportViewer
+                <StructuredReportViewer
                   title="MedGemma 回答"
                   content={mgAnswer.answer}
+                  summary={mgAnswer.summary}
+                  sections={mgAnswer.sections}
                   inferenceTime={mgAnswer.inference_time}
                 />
               </div>

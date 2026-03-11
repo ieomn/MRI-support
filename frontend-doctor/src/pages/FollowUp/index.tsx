@@ -20,6 +20,7 @@ const FollowUp: React.FC = () => {
   const [tasks, setTasks] = useState<any[]>([]);
   const [dashboard, setDashboard] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [tasksLoading, setTasksLoading] = useState(false);
   const [createVisible, setCreateVisible] = useState(false);
   const [form] = Form.useForm();
 
@@ -42,10 +43,12 @@ const FollowUp: React.FC = () => {
 
   const loadTasks = useCallback(async () => {
     if (!selectedPatient) { setTasks([]); return; }
+    setTasksLoading(true);
     try {
       const res: any = await followupAPI.getPatientTasks(selectedPatient);
       if (res.success) setTasks(res.data || []);
     } catch { /* interceptor */ }
+    finally { setTasksLoading(false); }
   }, [selectedPatient]);
 
   const loadDashboard = useCallback(async () => {
@@ -59,12 +62,13 @@ const FollowUp: React.FC = () => {
   useEffect(() => { loadPlans(); loadTasks(); }, [loadPlans, loadTasks]);
 
   const handleCreatePlan = async () => {
+    if (!selectedPatient) { message.error('请先选择患者'); return; }
     try {
       const values = await form.validateFields();
       const res: any = await followupAPI.createPlan({
-        patient_id: selectedPatient!,
+        patient_id: selectedPatient,
         plan_name: values.plan_name,
-        start_date: values.start_date.toISOString(),
+        start_date: values.start_date.format('YYYY-MM-DDTHH:mm:ss'),
         schedule_config: [
           { day: 30, tasks: ['术后1月问卷', '影像复查'] },
           { day: 90, tasks: ['术后3月问卷', '肿瘤标志物'] },
@@ -113,7 +117,7 @@ const FollowUp: React.FC = () => {
             <Col span={6}><Card><Statistic title="待完成任务" value={stats.pending || 0} valueStyle={{ color: '#1890ff' }} prefix={<ClockCircleOutlined />} /></Card></Col>
             <Col span={6}><Card><Statistic title="已完成任务" value={stats.completed || 0} valueStyle={{ color: '#52c41a' }} prefix={<CheckCircleOutlined />} /></Card></Col>
             <Col span={6}><Card><Statistic title="已逾期任务" value={stats.overdue || 0} valueStyle={{ color: '#ff4d4f' }} prefix={<WarningOutlined />} /></Card></Col>
-            <Col span={6}><Card><Statistic title="总计划数" value={plans.length} prefix={<CalendarOutlined />} /></Card></Col>
+            <Col span={6}><Card><Statistic title="总任务数" value={(stats.pending || 0) + (stats.completed || 0) + (stats.overdue || 0)} prefix={<CalendarOutlined />} /></Card></Col>
           </Row>
           {dashboard?.overdue_tasks?.length > 0 && (
             <Card title={<Space><WarningOutlined style={{ color: '#ff4d4f' }} /> 逾期任务提醒</Space>} size="small">
@@ -177,7 +181,7 @@ const FollowUp: React.FC = () => {
             />
             <Button icon={<ReloadOutlined />} onClick={loadTasks}>刷新</Button>
           </Space>
-          <Table loading={loading} dataSource={tasks} rowKey="id" columns={taskColumns} />
+          <Table loading={tasksLoading} dataSource={tasks} rowKey="id" columns={taskColumns} />
         </>
       ),
     },
